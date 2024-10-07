@@ -238,6 +238,8 @@ class WriteFinalSftManifest(BaseProcessor):
         self,
         prompt_type: str,
         chat_format: bool = False,
+        question_key: str = "question",
+        solution_key: str = "generation",
         generation_suffix: str = "",
         metadata: Optional[Dict] = None,
         **kwargs,
@@ -247,6 +249,8 @@ class WriteFinalSftManifest(BaseProcessor):
         self.chat_format = chat_format
         self.metadata = metadata
         self.generation_suffix = generation_suffix
+        self.question_key = question_key
+        self.solution_key = solution_key
         if self.generation_suffix and self.chat_format:
             raise ValueError("generation_suffix can only be used with chat_format=False")
         if not self.metadata:
@@ -280,8 +284,8 @@ class WriteFinalSftManifest(BaseProcessor):
                     elem['mask'] = 'User'
                     elem['type'] = None
                 else:
-                    elem["input"] = prompt.build_string(input_dict={"question": elem['question']})
-                    elem["output"] = elem.pop("generation") + self.generation_suffix
+                    elem["input"] = prompt.build_string(input_dict={"question": elem[self.question_key]})
+                    elem["output"] = elem.pop(self.solution_key) + self.generation_suffix
                 elem.update(self.metadata)
                 fout.write(json.dumps(elem) + "\n")
                 samples_count += 1
