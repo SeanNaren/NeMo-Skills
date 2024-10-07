@@ -178,7 +178,6 @@ def load_tokenizer(tokenizer_dir: str, model_name: str):
     else:
         tokenizer = AutoTokenizer.from_pretrained(
             tokenizer_dir,
-            tokenizer_type=model_name,
             legacy=False,
             padding_side='left',
             truncation_side='left',
@@ -196,12 +195,9 @@ def load_tokenizer(tokenizer_dir: str, model_name: str):
 def read_model_name(config):
     name = config['pretrained_config']['architecture'].lower()
     name_map = {
-        'MistralForCausalLM'.lower(): 'mistral',
-        'LlamaForCausalLM'.lower(): 'llama',
-        'MixtralForCausalLM'.lower(): 'mixtral',
         'GPTForCausalLM'.lower(): 'gpt-next',
     }
-    return name_map[name]
+    return name_map.get(name, None)
 
 
 def generate(
@@ -417,6 +413,7 @@ def _stream(
             output_log_probs,
             output_cum_log_probs,
             batch_input_ids,
+            batch_input_ids_list,
             streaming,
             request_ids,
             return_all_generated_tokens,
@@ -466,9 +463,8 @@ class TensorRTLLM:
             enable_chunked_context=True,
             kv_cache_enable_block_reuse=True,
         )
-        # setting to the default max batch size in trtllm.
         # might need to adjust in the future
-        self.executor = ThreadPoolExecutor(max_workers=256)
+        self.executor = ThreadPoolExecutor(max_workers=1024)
         self.requests = {}  # id to future
 
     def get_output(

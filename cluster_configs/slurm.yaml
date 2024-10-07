@@ -12,14 +12,25 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-cluster: local
+cluster: slurm
+account: ???
+partition: ???
+job_name_prefix: "nemo_skills"
+extra_sbatch_args:
+  - --exclusive
+  - --mem=0
+extra_sandbox_args:
+  - --overlap
 
 containers:
   tensorrt_llm: igitman/nemo-skills-trtllm:0.3.2
   vllm: igitman/nemo-skills-vllm:0.3.1
   nemo: igitman/nemo-skills-sft:0.3.0
-  # sandbox is always re-built locally
+  sandbox: igitman/nemo-skills-sandbox:0.3.0
 
-# change this to "sudo docker" if non-root user access is not set up
-# to set up non-root access, follow https://docs.docker.com/engine/install/linux-postinstall/#manage-docker-as-a-non-root-user
-docker_cmd: "docker"
+# can use this section to set timeouts for different partitions
+# this will be used as a slurm parameter + to signal SFT job to finish
+# before the timeout to have time to save the last checkpoint
+# timeouts:
+#   partition_name1: 06:00:00
+#   partition_name2: 01:30:00

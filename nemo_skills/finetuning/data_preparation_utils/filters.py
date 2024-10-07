@@ -137,6 +137,17 @@ class DropBrokenCode(BaseFilter):
         return [DataEntry(data=data_entry, metrics=dict(num_removed=0))]
 
 
+class DropIncorrectCodeBlocks(BaseFilter):
+    def __init__(self, solution_key: str = "generation", **kwargs):
+        super().__init__(**kwargs)
+        self.solution_key = solution_key
+
+    def process_dataset_entry(self, data_entry) -> List:
+        if len(PATTERN_PYTHON_CODE.findall(data_entry[self.solution_key])) != 1:
+            return [DataEntry(data=None, metrics=dict(num_removed=1))]
+        return [DataEntry(data=data_entry, metrics=dict(num_removed=0))]
+
+
 class TrimSolutions(BaseFilter):
 
     def __init__(self, solution_key: str = "generation", **kwargs):
