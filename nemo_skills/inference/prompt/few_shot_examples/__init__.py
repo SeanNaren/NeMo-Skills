@@ -17,13 +17,17 @@ from nemo_skills.inference.prompt.few_shot_examples.examples_math import example
 from nemo_skills.inference.prompt.few_shot_examples.examples_tabmwp import examples_map as examples_tabmwp
 from nemo_skills.inference.prompt.few_shot_examples.examples_code import examples_map as examples_code
 from nemo_skills.inference.prompt.few_shot_examples.examples_code_unittest import examples_map as examples_code_unittest
+from nemo_skills.inference.prompt.few_shot_examples.examples_code_unittest_single import \
+    examples_map as examples_code_unittest_single
 
 examples_map = examples_gsm8k.copy()
 examples_map.update(examples_math)
 examples_map.update(examples_tabmwp)
 examples_map.update(examples_code)
 examples_map.update(examples_code_unittest)
-assert len(examples_map) == len(examples_gsm8k) + len(examples_math) + len(examples_code) + len(examples_code_unittest) + len(
+examples_map.update(examples_code_unittest_single)
+assert len(examples_map) == len(examples_gsm8k) + len(examples_math) + len(examples_code) + len(
+    examples_code_unittest) + len(examples_code_unittest_single) + len(
     examples_tabmwp
 ), "Duplicate keys in examples!"
 

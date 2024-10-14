@@ -25,14 +25,12 @@ def similar_elements(test_tup1, test_tup2):
   res = tuple(set(test_tup1) & set(test_tup2))
   return (res)	
   
-# generate some test cases
+# run test case
 assert set(similar_elements((3, 4, 5, 6),(5, 7, 4, 10))) == set((4, 5))
-assert similar_elements((1, 2, 3, 4),(5, 4, 3, 7)) == (3, 4)
-assert similar_elements((11, 12, 14, 13),(17, 15, 14, 13)) == (13, 14)
 {end_code}
 {start_code_output}
 {end_code_output}
-All test cases passed, we have the final solution:
+Test case passed, we have the final solution:
 ```python
 def similar_elements(test_tup1, test_tup2):
   res = tuple(set(test_tup1) & set(test_tup2))
@@ -42,7 +40,7 @@ def similar_elements(test_tup1, test_tup2):
     {
         "question": """\"\"\"
 Write a python function to identify non-prime numbers.
-assert is_not_prime(2) == False
+assert is_not_prime(35) == True
 \"\"\"""".strip(),
         "generation": """
 Let's solve this problem using Python code.
@@ -55,9 +53,7 @@ def is_not_prime(n):
             result = True
     return result
 
-# generate some test cases
-assert is_not_prime(2) == False
-assert is_not_prime(10) == True
+# run test case
 assert is_not_prime(35) == True
 {end_code}
 {start_code_output}
@@ -76,14 +72,12 @@ def is_not_prime(n):
             result = True
     return result
 
-# generate some test cases
-assert is_not_prime(2) == False
-assert is_not_prime(10) == True
+# run test case
 assert is_not_prime(35) == True
 {end_code}
 {start_code_output}
 {end_code_output}
-All test cases passed, we have the final solution:
+Test case passed, we have the final solution:
 ```python
 import math
 def is_not_prime(n):
@@ -106,10 +100,8 @@ def heap_queue_largest(nums,n):
   largest_nums = hq.nlargest(n, nums)
   return largest_nums
   
-# generate some test cases
+# run test case
 assert heap_queue_largest( [25, 35, 22, 85, 14, 65, 75, 22, 58],3)==[85, 75, 65]
-assert heap_queue_largest( [25, 35, 22, 85, 14, 65, 75, 22, 58],2)==[85, 75]
-assert heap_queue_largest( [25, 35, 22, 85, 14, 65, 75, 22, 58],5)==[85, 75, 65, 58, 35]
 {end_code}
 {start_code_output}
 NameError: name 'hq' is not defined
@@ -121,14 +113,12 @@ def heap_queue_largest(nums,n):
   largest_nums = hq.nlargest(n, nums)
   return largest_nums
 
-# generate some test cases
+# run test case
 assert heap_queue_largest( [25, 35, 22, 85, 14, 65, 75, 22, 58],3)==[85, 75, 65]
-assert heap_queue_largest( [25, 35, 22, 85, 14, 65, 75, 22, 58],2)==[85, 75]
-assert heap_queue_largest( [25, 35, 22, 85, 14, 65, 75, 22, 58],5)==[85, 75, 65, 58, 35]
 {end_code}
 {start_code_output}
 {end_code_output}
-All test cases passed, we have the final solution:
+Test case passed, we have the final solution:
 ```python
 import heapq as hq
 def heap_queue_largest(nums,n):
@@ -149,14 +139,12 @@ def is_Power_Of_Two (x):
 def differ_At_One_Bit_Pos(a,b): 
     return is_Power_Of_Two(a ^ b)
 
-# generate some test cases
+# run test case
 assert differ_At_One_Bit_Pos(13,9) == True
-assert differ_At_One_Bit_Pos(15,8) == False
-assert differ_At_One_Bit_Pos(2,4) == False
 {end_code}
 {start_code_output}
 {end_code_output}
-All test cases passed, we have the final solution:
+Test case passed, we have the final solution:
 ```python
 def is_Power_Of_Two (x): 
     return x and (not(x & (x - 1))) 
@@ -179,14 +167,12 @@ import re
 def find_char_long(text):
   return (re.findall(r"\b\w{4,}\b", text))
 
-# generate some test cases
+# run test case
 assert find_char_long('Please move back to stream') == ['Please', 'move', 'back', 'stream']
-assert find_char_long('Jing Eco and Tech') == ['Jing', 'Tech']
-assert find_char_long('Jhingai wulu road Zone 3') == ['Jhingai', 'wulu', 'road', 'Zone']
 {end_code}
 {start_code_output}
 {end_code_output}
-All test cases passed, we have the final solution:
+Test case passed, we have the final solution:
 ```python
 import re
 def find_char_long(text):
@@ -208,15 +194,13 @@ def square_nums(nums):
  square_nums = list(map(lambda x: x * 2, nums))
  return square_nums
 
-# generate some test cases
-assert square_nums([1, 2, 3, 4, 5, 6, 7, 8, 9, 10])==([1, 4, 9, 16, 25, 36, 49, 64, 81, 100])
-assert square_nums([10,20,30])==([100,400,901])
-assert square_nums([12,15])==([144,226])
+# run test case
+assert square_nums([1, 2, 3, 4, 5, 6, 7, 8, 9, 10])==([1, 4, 9, 16, 25, 36, 49, 65, 82, 100])
 {end_code}
 {start_code_output}
 Traceback (most recent call last):
   line 6, in <module>
-    assert square_nums([1, 2, 3, 4, 5, 6, 7, 8, 9, 10])==([1, 4, 9, 16, 25, 36, 49, 64, 81, 100])
+    assert square_nums([1, 2, 3, 4, 5, 6, 7, 8, 9, 10])==([1, 4, 9, 16, 25, 36, 49, 65, 82, 100])
 AssertionError
 {end_code_output}
 One of our test cases failed. I see an error in the code. Here is the corrected code.
@@ -225,32 +209,28 @@ def square_nums(nums):
  square_nums = list(map(lambda x: x ** 2, nums))
  return square_nums
 
-# generate some test cases
-assert square_nums([1, 2, 3, 4, 5, 6, 7, 8, 9, 10])==([1, 4, 9, 16, 25, 36, 49, 64, 81, 100])
-assert square_nums([10,20,30])==([100,400,901])
-assert square_nums([12,15])==([144,226])
+# run test case
+assert square_nums([1, 2, 3, 4, 5, 6, 7, 8, 9, 10])==([1, 4, 9, 16, 25, 36, 49, 65, 82, 100])
 {end_code}
 {start_code_output}
 Traceback (most recent call last):
-  line 7, in <module>
-    assert square_nums([10,20,30])==([100,400,901])
+  line 6, in <module>
+    assert square_nums([1, 2, 3, 4, 5, 6, 7, 8, 9, 10])==([1, 4, 9, 16, 25, 36, 49, 65, 82, 100])
 AssertionError
 {end_code_output}
-I see an error in one of the test cases, it should be 900 not 901.
+I see an error in one of the test cases, it should be 81 not 82.
 {start_code}
 def square_nums(nums):
  square_nums = list(map(lambda x: x ** 2, nums))
  return square_nums
 
-# generate some test cases
-assert square_nums([1, 2, 3, 4, 5, 6, 7, 8, 9, 10])==([1, 4, 9, 16, 25, 36, 49, 64, 81, 100])
-assert square_nums([10,20,30])==([100,400,900])
-assert square_nums([12,15])==([144,225])
+# run test case
+assert square_nums([1, 2, 3, 4, 5, 6, 7, 8, 9, 10])==([1, 4, 9, 16, 25, 36, 49, 65, 81, 100])
 {end_code}
 {start_code_output}
 Traceback (most recent call last):
-  line 8, in <module>
-    assert square_nums([12,15])==([144,225])
+  line 6, in <module>
+    assert square_nums([1, 2, 3, 4, 5, 6, 7, 8, 9, 10])==([1, 4, 9, 16, 25, 36, 49, 65, 81, 100])
 AssertionError
 {end_code_output}
 We have reached the maximum number of execution steps we can take, here is the final solution I have:
@@ -280,14 +260,12 @@ def find_Rotations(str):
             return i 
     return n
 
-# generate some test cases
+# run test case
 assert find_Rotations(\"aaaa\") == 1
-assert find_Rotations(\"ab\") == 2
-assert find_Rotations(\"abc\") == 3
 {end_code}
 {start_code_output}
 {end_code_output}
-All test cases passed, we have the final solution:
+Test case passed, we have the final solution:
 ```python
 def find_Rotations(str): 
     tmp = str + str
@@ -302,5 +280,5 @@ def find_Rotations(str):
 ]
 
 examples_map = {
-    "mbpp_unittest_with_code": text_with_code,
+    "mbpp_unittest_single_with_code": text_with_code,
 }

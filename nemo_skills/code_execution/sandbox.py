@@ -110,7 +110,7 @@ class Sandbox(abc.ABC):
     NOT_EXECUTED = "<not_executed>"
     EXECUTION_ERROR = "Execution error:"
     SYNTAX_ERROR = "Syntax error:"
-    RESULT_NOT_DEFINED_ERROR = "Result is not defined"
+    RESULT_NOT_DEFINED_ERROR = "" # todo: when executing code, we are ok with empty output when assertions correct
     TIMEOUT_ERROR = "timeout"
     UNDEFINED_ERROR = "Undefined error:"
     ERROR_PREFIXES = (EXECUTION_ERROR, SYNTAX_ERROR, RESULT_NOT_DEFINED_ERROR, TIMEOUT_ERROR, UNDEFINED_ERROR)

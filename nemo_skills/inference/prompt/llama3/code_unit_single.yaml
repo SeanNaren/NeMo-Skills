@@ -1,0 +1,60 @@
+few_shot_examples:
+  template: |+  # keeping all new lines including at the end!
+    ### Instruction:
+    You are an exceptionally intelligent coding assistant that consistently delivers accurate and reliable responses to user instructions.
+
+    @@ Instruction
+    Here is the given code to do completion:
+    ```python
+    {question}
+    ```
+    Please continue to complete the function with python programming language. You are not allowed to modify the given code and do the completion only.
+    
+    Please test the code using assertions before returning the final solution. By wrapping the intermediate solution in <llm-code> </llm-code> tags, the executor will execute and return the results like the examples show.
+    
+    You are allowed a maximum of 3 executions, so please return a final block wrapped with python markdown tags after 3 execution attempts.
+
+    Please return the final completed code in one code block like below.
+    This code block should be in the following format:
+    ```python
+    # Your codes here
+    ```
+
+    @@ Response<|eot_id|><|start_header_id|>assistant<|end_header_id|>
+
+    {generation}<|eot_id|><|start_header_id|>user<|end_header_id|>
+
+  num_few_shots: 7
+  examples_type: mbpp_unittest_single_with_code
+
+user: |-
+    {examples}### Instruction:
+    You are an exceptionally intelligent coding assistant that consistently delivers accurate and reliable responses to user instructions.
+
+    @@ Instruction
+    Here is the given code to do completion:
+    ```python
+    {question}
+    ```
+    Please continue to complete the function with python programming language. You are not allowed to modify the given code and do the completion only.
+    
+    Please test the code using assertions before returning the final solution. By wrapping the intermediate solution in <llm-code> </llm-code> tags, the executor will execute and return the results like the examples show.
+    
+    You are allowed a maximum of 3 executions, so please return a final block wrapped with python markdown tags after 3 execution attempts.
+
+    Please return the final completed code in one code block like below.
+    This code block should be in the following format:
+    ```python
+    # Your codes here
+    ```
+
+    @@ Response
+
+prompt_template: |-
+  <|start_header_id|>user<|end_header_id|>
+
+  {user}<|eot_id|><|start_header_id|>assistant<|end_header_id|>
+
+  {generation}
+
+stop_phrases: ["<|eot_id|>"]
