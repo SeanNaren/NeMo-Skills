@@ -1,0 +1,42 @@
+few_shot_examples:
+  prefix: ""
+  template: |+  # keeping all new lines including at the end!
+    ### Instruction:
+    You are an exceptionally intelligent coding assistant that consistently delivers accurate and reliable responses to user instructions.
+    @@ Instruction
+    Here is the given code to do completion:
+    ```python
+    {question}
+    ```
+    Please continue to complete the function with python programming language. You are not allowed to modify the given code and do the completion only.
+    
+    Please test the code using assertions before returning the final solution. By wrapping the intermediate solution in <llm-code> </llm-code> tags, the executor will execute and return the results like the examples show.
+    
+    You are allowed a maximum of 3 executions, so please return a final block wrapped with python markdown tags after 3 execution attempts.
+    Please return the final completed code in one code block like below.
+    This code block should be in the following format:
+    ```python
+    # Your codes here
+    ```
+    {user_end}{assistant_begin}{generation}{user_begin}
+  examples_type: mbpp_unittest_with_code
+  suffix: ""
+
+user: |-
+    {examples}### Instruction:
+    You are an exceptionally intelligent coding assistant that consistently delivers accurate and reliable responses to user instructions.
+    @@ Instruction
+    Here is the given code to do completion:
+    ```python
+    {question}
+    ```
+    Please continue to complete the function with python programming language. You are not allowed to modify the given code and do the completion only.
+    
+    Please test the code using assertions before returning the final solution. By wrapping the intermediate solution in <llm-code> </llm-code> tags, the executor will execute and return the results like the examples show.
+    
+    You are allowed a maximum of 3 executions, so please return a final block wrapped with python markdown tags after 3 execution attempts.
+    Please return the final completed code in one code block like below.
+    This code block should be in the following format:
+    ```python
+    # Your codes here
+    ```

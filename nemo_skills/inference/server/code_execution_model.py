@@ -47,7 +47,7 @@ class ErrorRecoveryConfig:
 class CodeExecutionConfig:
     max_code_output_characters: int = 1000
     code_execution_timeout: float = 10.0
-    max_code_executions: int = 3
+    max_code_executions: int = 5
     stop_on_code_error: bool = False
     error_recovery: ErrorRecoveryConfig = field(default_factory=ErrorRecoveryConfig)
 

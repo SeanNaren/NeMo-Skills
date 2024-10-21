@@ -1,0 +1,34 @@
+few_shot_examples:
+  prefix: ""
+  template: |+  # keeping all new lines including at the end!
+    ### Instruction:
+    You are an exceptionally intelligent coding assistant that consistently delivers accurate and reliable responses to user instructions.
+    @@ Instruction
+    Here is the given code to do completion:
+    ```python
+    {question}
+    ```
+    Please continue to complete the function with python programming language. You are not allowed to modify the given code and do the completion only.
+    Please return all completed codes in one code block.
+    This code block should be in the following format:
+    ```python
+    # Your codes here
+    ```
+    {user_end}{assistant_begin}{generation}{user_begin}
+  examples_type: mbpp_with_code
+  suffix: ""
+
+user: |-
+    {examples}### Instruction:
+    You are an exceptionally intelligent coding assistant that consistently delivers accurate and reliable responses to user instructions.
+    @@ Instruction
+    Here is the given code to do completion:
+    ```python
+    {question}
+    ```
+    Please continue to complete the function with python programming language. You are not allowed to modify the given code and do the completion only.
+    Please return all completed codes in one code block.
+    This code block should be in the following format:
+    ```python
+    # Your codes here
+    ```

@@ -13,7 +13,15 @@
 # limitations under the License.
 from nemo_skills.prompt.few_shot_examples.gsm8k import examples_map as examples_gsm8k
 from nemo_skills.prompt.few_shot_examples.math import examples_map as examples_math
+from nemo_skills.prompt.few_shot_examples.examples_code import examples_map as examples_code
+from nemo_skills.prompt.few_shot_examples.examples_code_unittest import examples_map as examples_code_unittest
+from nemo_skills.prompt.few_shot_examples.examples_code_unittest_single import \
+    examples_map as examples_code_unittest_single
 
 examples_map = examples_gsm8k.copy()
 examples_map.update(examples_math)
-assert len(examples_map) == len(examples_gsm8k) + len(examples_math), "Duplicate keys in examples!"
+examples_map.update(examples_code)
+examples_map.update(examples_code_unittest)
+examples_map.update(examples_code_unittest_single)
+assert len(examples_map) == len(examples_gsm8k) + len(examples_math) + len(examples_code) + len(
+    examples_code_unittest) + len(examples_code_unittest_single)
