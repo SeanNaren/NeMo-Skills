@@ -55,24 +55,18 @@ def main():
         logging.error("No checkpoint directory ending with '-last' found.")
         return
 
-    # Determine the source model weights directory.
-    # If the checkpoint directory has a "model_weights" folder, use that;
-    # otherwise, use the checkpoint directory itself.
     if "model_weights" in os.listdir(last_checkpoint):
         src_model_weights = os.path.join(last_checkpoint, "model_weights")
     else:
         src_model_weights = last_checkpoint
 
-    # Define the destination checkpoint directory (appending '-copied')
     dest_ckpt_base = os.path.join(args.checkpoint_dir, args.name_prefix + "-copied")
     dest_model_weights = os.path.join(dest_ckpt_base, "model_weights")
     os.makedirs(dest_model_weights, exist_ok=True)
 
-    # Copy model weights recursively
     shutil.copytree(src_model_weights, dest_model_weights, dirs_exist_ok=True)
     logging.info(f"Copied model weights from {src_model_weights} to {dest_model_weights}")
 
-    # Copy any additional items from the checkpoint (excluding model_weights)
     for item in os.listdir(last_checkpoint):
         if item == "model_weights":
             continue
@@ -85,7 +79,6 @@ def main():
             shutil.copy(src_item, dest_item)
             logging.info(f"Copied file {src_item} to {dest_item}")
 
-    # Copy configuration and tokenizer files from the untarred Nemo directory
     shutil.copy(
         os.path.join(args.untarred_nemo_dir, "model_config.yaml"),
         os.path.join(dest_ckpt_base, "model_config.yaml")
