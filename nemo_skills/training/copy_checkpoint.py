@@ -20,9 +20,6 @@ import logging
 import os
 import shutil
 
-import numpy as np
-import zarr
-
 logging.basicConfig(level=logging.INFO)
 
 
@@ -86,32 +83,7 @@ def main():
             continue
 
         logging.info(f"Processing weight directory: {item}")
-        try:
-            array = zarr.open(src_item_path, mode="r")
-        except Exception as e:
-            logging.error(f"Error opening {src_item_path} with zarr: {e}")
-            continue
-
-        dest_weight_path = os.path.join(dest_model_weights, item)
-        logging.info(f"Saving weight {item} to {dest_weight_path}")
-        try:
-            output_array = zarr.create(
-                array.shape,
-                dtype=array.dtype,
-                store=dest_weight_path,
-                chunks=array.chunks,
-                compressor=None,
-                fill_value=None,
-                write_empty_chunks=True,
-            )
-            if array.dtype == np.dtype("bfloat16"):
-                arr = output_array
-                arr._dtype = array.dtype
-                zarray = arr.store[".zarray"]
-                arr.store[".zarray"] = zarray.replace(b"<V2", b"bfloat16")
-            output_array[:] = array[:]
-        except Exception as e:
-            logging.error(f"Error saving weight {item}: {e}")
+        copy_items.append(src_item_path)
 
     for item in copy_items:
         item_name = os.path.basename(item)
