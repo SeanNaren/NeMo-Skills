@@ -20,6 +20,9 @@ import logging
 import os
 import shutil
 
+import numpy as np
+import zarr
+
 logging.basicConfig(level=logging.INFO)
 
 
@@ -64,24 +67,68 @@ def main():
     dest_model_weights = os.path.join(dest_ckpt_base, "model_weights")
     os.makedirs(dest_model_weights, exist_ok=True)
 
-    shutil.copytree(src_model_weights, dest_model_weights, dirs_exist_ok=True)
-    logging.info(f"Copied model weights from {src_model_weights} to {dest_model_weights}")
+    # List to hold items that we copy directly (non-zarr arrays or extra states)
+    copy_items = []
 
-    for item in os.listdir(last_checkpoint):
-        if item == "model_weights":
+    # Process each item in the source model weights directory with careful logic.
+    for item in os.listdir(src_model_weights):
+        src_item_path = os.path.join(src_model_weights, item)
+        if not os.path.isdir(src_item_path):
+            # Non-directory items: add to list for direct copying.
+            copy_items.append(src_item_path)
             continue
-        src_item = os.path.join(last_checkpoint, item)
-        dest_item = os.path.join(dest_ckpt_base, item)
-        if os.path.isdir(src_item):
-            shutil.copytree(src_item, dest_item, dirs_exist_ok=True)
-            logging.info(f"Copied directory {src_item} to {dest_item}")
+
+        # transformer engine states, leave them out
+        if item.endswith("._extra_state"):
+            copy_items.append(src_item_path)
+            continue
+
+        # skipping optimizer states
+        if item.startswith("optimizer."):
+            logging.info(f"Skipping optimizer state: {item}")
+            continue
+
+        logging.info(f"Processing weight directory: {item}")
+        try:
+            array = zarr.open(src_item_path, mode="r")
+        except Exception as e:
+            logging.error(f"Error opening {src_item_path} with zarr: {e}")
+            continue
+
+        dest_weight_path = os.path.join(dest_model_weights, item)
+        logging.info(f"Saving weight {item} to {dest_weight_path}")
+        try:
+            output_array = zarr.create(
+                array.shape,
+                dtype=array.dtype,
+                store=dest_weight_path,
+                chunks=array.chunks,
+                compressor=None,
+                fill_value=None,
+                write_empty_chunks=True,
+            )
+            if array.dtype == np.dtype("bfloat16"):
+                arr = output_array
+                arr._dtype = array.dtype
+                zarray = arr.store[".zarray"]
+                arr.store[".zarray"] = zarray.replace(b"<V2", b"bfloat16")
+            output_array[:] = array[:]
+        except Exception as e:
+            logging.error(f"Error saving weight {item}: {e}")
+
+    for item in copy_items:
+        item_name = os.path.basename(item)
+        dest_item_path = os.path.join(dest_model_weights, item_name)
+        if os.path.isfile(item):
+            logging.info(f"Copying file {item} to {dest_item_path}")
+            shutil.copy(item, dest_item_path)
         else:
-            shutil.copy(src_item, dest_item)
-            logging.info(f"Copied file {src_item} to {dest_item}")
+            logging.info(f"Copying directory {item} to {dest_item_path}")
+            shutil.copytree(item, dest_item_path, dirs_exist_ok=True)
 
     shutil.copy(
         os.path.join(args.untarred_nemo_dir, "model_config.yaml"),
-        os.path.join(dest_ckpt_base, "model_config.yaml")
+        os.path.join(dest_ckpt_base, "model_config.yaml"),
     )
     logging.info("Copied model_config.yaml")
 
