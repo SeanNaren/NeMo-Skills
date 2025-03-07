@@ -67,14 +67,11 @@ def main():
     dest_model_weights = os.path.join(dest_ckpt_base, "model_weights")
     os.makedirs(dest_model_weights, exist_ok=True)
 
-    # List to hold items that we copy directly (non-zarr arrays or extra states)
     copy_items = []
-
-    # Process each item in the source model weights directory with careful logic.
     for item in os.listdir(src_model_weights):
         src_item_path = os.path.join(src_model_weights, item)
+        # if item is not a directory, skip it
         if not os.path.isdir(src_item_path):
-            # Non-directory items: add to list for direct copying.
             copy_items.append(src_item_path)
             continue
 
