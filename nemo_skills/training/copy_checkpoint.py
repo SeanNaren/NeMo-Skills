@@ -24,11 +24,11 @@ logging.basicConfig(level=logging.INFO)
 
 
 def main():
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(description="Copies the last checkpoint from the training folder.")
     parser.add_argument(
         "--name_prefix",
         required=True,
-        help="Name of the final checkpoint. Will append '-copied' automatically.",
+        help="Name of the final checkpoint. Will append '-last' automatically.",
     )
     parser.add_argument(
         "--untarred_nemo_dir",
@@ -60,7 +60,7 @@ def main():
     else:
         src_model_weights = last_checkpoint
 
-    dest_ckpt_base = os.path.join(args.checkpoint_dir, args.name_prefix + "-copied")
+    dest_ckpt_base = os.path.join(args.checkpoint_dir, args.name_prefix + "-last")
     dest_model_weights = os.path.join(dest_ckpt_base, "model_weights")
     os.makedirs(dest_model_weights, exist_ok=True)
 
