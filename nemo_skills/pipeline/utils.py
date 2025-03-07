@@ -29,6 +29,7 @@ import nemo_run as run
 import yaml
 from huggingface_hub import get_token
 from invoke import StreamWatcher
+from nemo_run.config import set_nemorun_home
 from nemo_run.core.execution.docker import DockerExecutor
 from nemo_run.core.execution.slurm import SlurmJobDetails
 from nemo_run.core.tunnel import SSHTunnel
@@ -138,6 +139,10 @@ def get_exp_handles(expname: str, ignore_finished=True, ignore_exp_not_exists=Tr
                 handles.append(job.handle)
                 continue
         return handles
+
+    # if we are given an experiment object, we can directly get the handles
+    if isinstance(expname, run.Experiment):
+        return _get_handles(expname)
 
     try:
         with run.Experiment.from_title(expname) as exp:
@@ -471,7 +476,14 @@ def get_cluster_config(cluster=None, config_dir=None):
     if not Path(config_file).exists():
         raise ValueError(f"Cluster config {config_file} not found.")
 
-    return read_config(config_file)
+    cluster_config = read_config(config_file)
+
+    if cluster_config['executor'] == 'slurm' and "ssh_tunnel" not in cluster_config:
+        if "job_dir" not in cluster_config:
+            raise ValueError("job_dir must be provided in the cluster config if ssh_tunnel is not provided.")
+        set_nemorun_home(cluster_config["job_dir"])
+
+    return cluster_config
 
 
 @lru_cache
@@ -498,6 +510,9 @@ def tunnel_hash(tunnel):
 
 
 def get_tunnel(cluster_config):
+    if "ssh_tunnel" not in cluster_config:
+        LOG.info("No ssh_tunnel configuration found, assuming we are running from the cluster already.")
+        return run.LocalTunnel(job_dir="")
     return _get_tunnel_cached(**cluster_config["ssh_tunnel"])
 
 
@@ -1013,7 +1028,7 @@ def add_task(
     If you want to avoid this, set `reuse_code=False`.
     """
     if run_after is not None and cluster_config["executor"] == "slurm":
-        if isinstance(run_after, str):
+        if isinstance(run_after, (str, run.Experiment)):
             run_after = [run_after]
         dependencies = []
         for dep_expname in run_after:
@@ -1146,7 +1161,7 @@ def add_task(
 
     if cluster_config["executor"] != "local":
         tunnel = get_tunnel(cluster_config)
-        if reuse_code:
+        if isinstance(tunnel, run.SSHTunnel) and reuse_code:
             reuse_code_exp = reuse_code_exp or REUSE_CODE_EXP.get(tunnel_hash(tunnel))
             if reuse_code_exp is not None:
                 if isinstance(reuse_code_exp, run.Experiment):
@@ -1158,7 +1173,8 @@ def add_task(
                         reuse_dir = reuse_exp.tunnels[tunnel.key].packaging_jobs['nemo-run'].dst_path
                 for executor in executors:
                     executor.packager.symlink_from_remote_dir = reuse_dir
-        else:  # if current is not reused, we are refreshing the cache as there is a reason to believe it's outdated
+        # if current is not reused, we are refreshing the cache as there is a reason to believe it's outdated
+        elif isinstance(tunnel, run.SSHTunnel):
             REUSE_CODE_EXP.pop(tunnel_hash(tunnel), None)
 
     if len(commands) == 1:
@@ -1191,6 +1207,8 @@ def run_exp(exp, cluster_config, sequential=None):
         exp.run(detach=True, sequential=False if sequential is None else sequential)
 
         # caching the experiment code for reuse
-        ssh_hash = tunnel_hash(get_tunnel(cluster_config))
-        if ssh_hash not in REUSE_CODE_EXP:
-            REUSE_CODE_EXP[ssh_hash] = exp
+        tunnel = get_tunnel(cluster_config)
+        if isinstance(tunnel, run.SSHTunnel):
+            ssh_hash = tunnel_hash(tunnel)
+            if ssh_hash not in REUSE_CODE_EXP:
+                REUSE_CODE_EXP[ssh_hash] = exp

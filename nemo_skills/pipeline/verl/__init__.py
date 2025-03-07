@@ -1,4 +1,4 @@
-# Copyright (c) 2024, NVIDIA CORPORATION. All rights reserved.
+# Copyright (c) 2025, NVIDIA CORPORATION.  All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -12,10 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from typer import Typer
 
-# Default evaluation and generation settings for the minif2f dataset
-PROMPT_CONFIG = 'lean4/formal-proof'
-DATASET_GROUP = 'lean4'
-METRICS_TYPE = "lean4-proof"
-DEFAULT_EVAL_ARGS = "++eval_type=lean4-proof"
-DEFAULT_GENERATION_ARGS = ""
+from nemo_skills.pipeline.app import app
+
+verl_app = Typer(help="Verl training pipelines (run 'ns verl --help' for more information)")
+
+app.add_typer(verl_app, name="verl")
