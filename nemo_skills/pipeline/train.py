@@ -259,7 +259,12 @@ def train(
     average_steps: str = typer.Option(
         'all',
         help="List of commas separated checkpoint steps to average. E.g 1000,5000. "
-        "If None, will save the last checkpoint.",
+        "If None, skip prepare eval stage.",
+    ),
+    save_last_ckpt: bool = typer.Option(
+            False,
+            help="If True, will save the final nemo checkpoint to final_nemo_path. "
+                 "average_steps has to be disabled to use this.",
     ),
     server_model: str = typer.Option(None, help="Path to the model or model name in API"),
     server_address: str = typer.Option(
@@ -332,6 +337,9 @@ def train(
 
     if " " in str(average_steps):
         raise ValueError("average steps should be separated with commas")
+
+    if average_steps and save_last_ckpt:
+        raise ValueError("cannot enable average_steps and save_last_ckpt together.")
 
     server_config = None
     if server_type is not None:
@@ -420,31 +428,32 @@ def train(
         if average_steps and average_steps != 'all':
             average_steps = f"--steps {' '.join(average_steps.split(','))} "
 
-        cmd = get_checkpoint_cmd(
-            nemo_model=nemo_model,
-            output_dir=output_dir,
-            final_nemo_path=final_nemo_path,
-            average_steps=average_steps,
-        )
+        if average_steps or save_last_ckpt:
+            cmd = get_checkpoint_cmd(
+                nemo_model=nemo_model,
+                output_dir=output_dir,
+                final_nemo_path=final_nemo_path,
+                average_steps=average_steps,
+            )
 
-        add_task(
-            exp,
-            cmd=cmd,
-            task_name=f"{expname}-prepare-eval",
-            log_dir=f"{log_dir}/prepare-eval-logs",
-            container=cluster_config["containers"]['nemo'],
-            cluster_config=cluster_config,
-            partition=partition,
-            time_min=time_min,
-            num_nodes=1,
-            num_tasks=1,
-            num_gpus=num_gpus,
-            run_after=run_after,
-            reuse_code=reuse_code,
-            reuse_code_exp=reuse_code_exp,
-            task_dependencies=[prev_task] if prev_task is not None else None,
-            slurm_kwargs={"exclusive": exclusive} if exclusive else None,
-        )
+            add_task(
+                exp,
+                cmd=cmd,
+                task_name=f"{expname}-prepare-eval",
+                log_dir=f"{log_dir}/prepare-eval-logs",
+                container=cluster_config["containers"]['nemo'],
+                cluster_config=cluster_config,
+                partition=partition,
+                time_min=time_min,
+                num_nodes=1,
+                num_tasks=1,
+                num_gpus=num_gpus,
+                run_after=run_after,
+                reuse_code=reuse_code,
+                reuse_code_exp=reuse_code_exp,
+                task_dependencies=[prev_task] if prev_task is not None else None,
+                slurm_kwargs={"exclusive": exclusive} if exclusive else None,
+            )
 
         # explicitly setting sequential to False since we set dependencies directly
         run_exp(exp, cluster_config, sequential=False)
