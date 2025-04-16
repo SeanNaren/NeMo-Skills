@@ -30,4 +30,5 @@ sympy
 tqdm
 transformers
 typer >= 0.13
+fire
 wandb
