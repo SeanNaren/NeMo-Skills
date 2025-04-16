@@ -41,7 +41,8 @@ def format_code_output(
             remaining_ce_string = (
                 f"```system\n"
                 f"You have run out of code executions! You can no longer write or execute code. "
-                f"Now you should continue solving the problem by relying on your mathematical reasoning and analytical skills.\n"
+                f"Now you should continue solving the problem by relying on your reasoning and analytical skills and "
+                f"return a final solution.\n "
                 f"```\n"
             )
     if code_output_format == 'llama':
