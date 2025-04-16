@@ -29,6 +29,7 @@ from pathlib import Path
 from rich.logging import RichHandler
 from fire import decorators as fire_decorators
 
+# isort: off
 from nemo_skills.file_utils import (
     jdump,
     jload,
@@ -37,6 +38,7 @@ from nemo_skills.file_utils import (
     calculate_chunk_indices,
     unroll_files
 )
+# isort: on
 
 
 def nested_dataclass(*args, **kwargs):
