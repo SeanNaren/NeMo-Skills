@@ -128,7 +128,7 @@ class GenerateSolutionsConfig:
             raise ValueError("If `dataset` is not provided, `prompt_config` is required")
 
         if isinstance(self.total_code_executions_in_prompt, ListConfig):
-            self.total_code_executions_in_prompt = list(self.total_code_executions_in_prompt)
+            self.total_code_executions_in_prompt = tuple(self.total_code_executions_in_prompt)
         
         if not isinstance(self.total_code_executions_in_prompt, int | list | tuple):
             raise ValueError(
