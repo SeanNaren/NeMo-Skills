@@ -341,6 +341,7 @@ class GenerationTask:
         total_code_executions_in_prompt = self.cfg.total_code_executions_in_prompt
         if isinstance(total_code_executions_in_prompt, tuple):
             min_val, max_val = total_code_executions_in_prompt
+            print("TOTAL CODE EXECUTIONS TUPLE", min_val, max_val)
             total_code_executions_in_prompt = random.randint(min_val, max_val)
         data_point['total_code_executions'] = total_code_executions_in_prompt
         return self.prompt.fill(
