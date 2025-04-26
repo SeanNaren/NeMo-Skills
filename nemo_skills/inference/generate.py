@@ -107,7 +107,7 @@ class GenerateSolutionsConfig:
     # if total_code_executions placeholder is not in the prompt, this parameter has no effect
     # if set to tuple, will be randomly sampled from random.randint(min_val, max_val) for each sample in a batch
     # useful to generate data with variable number of total_code_executions_in_prompt
-    total_code_executions_in_prompt: Any = 8
+    total_code_executions_in_prompt: Any = tuple([1, 8])
 
     # extra stop phrases for llms
     extra_stop_phrases: list[str] = field(default_factory=list)
@@ -130,6 +130,7 @@ class GenerateSolutionsConfig:
 
         if isinstance(self.total_code_executions_in_prompt, ListConfig):
             self.total_code_executions_in_prompt = tuple(self.total_code_executions_in_prompt)
+        print("TOTAL CODE EXECUTIONS", self.total_code_executions_in_prompt)
         
         if not isinstance(self.total_code_executions_in_prompt, int | list | tuple):
             raise ValueError(
