@@ -130,11 +130,10 @@ class GenerateSolutionsConfig:
 
         if isinstance(self.total_code_executions_in_prompt, ListConfig):
             self.total_code_executions_in_prompt = tuple(self.total_code_executions_in_prompt)
-        print("TOTAL CODE EXECUTIONS", self.total_code_executions_in_prompt)
-        
-        if not isinstance(self.total_code_executions_in_prompt, int | list | tuple):
+
+        if not isinstance(self.total_code_executions_in_prompt, (int, list, tuple)):
             raise ValueError(
-                "`total_code_executions_in_prompt` must be either int, list or tupe, "
+                "`total_code_executions_in_prompt` must be either int, list or tuple, "
                 f"got {type(self.total_code_executions_in_prompt)}"
             )
 
@@ -298,6 +297,12 @@ class GenerationTask:
             return data
 
         starting_idx = 0
+        if self.cfg.num_chunks:
+            chunk_index = self.cfg.output_file.rfind("_chunk")
+            base_output_file = self.cfg.output_file[:chunk_index] + ".jsonl"
+            if Path(base_output_file).exists():
+                LOG.warning(f"File `{base_output_file}` exists, skipping generation")
+                return []
         try:
             with open(self.cfg.output_file, "rt", encoding="utf-8") as fin:
                 starting_idx = len(fin.readlines())
@@ -318,6 +323,12 @@ class GenerationTask:
 
         filled_positions = set()
         if self.cfg.skip_filled:
+            if self.cfg.num_chunks:
+                chunk_index = self.cfg.output_file.rfind("_chunk")
+                base_output_file = self.cfg.output_file[:chunk_index] + ".jsonl"
+                if Path(base_output_file).exists():
+                    LOG.warning(f"File `{base_output_file}` exists, skipping generation")
+                    return []
             try:
                 with open(self.cfg.output_file + '-async', "rt", encoding="utf-8") as fin:
                     for line in fin:
@@ -339,9 +350,8 @@ class GenerationTask:
         """Passing in full data in case it's needed to fill the prompt in subclasses."""
         data_point = deepcopy(data_point)
         total_code_executions_in_prompt = self.cfg.total_code_executions_in_prompt
-        if isinstance(total_code_executions_in_prompt, tuple):
+        if isinstance(total_code_executions_in_prompt, (list, tuple)):
             min_val, max_val = total_code_executions_in_prompt
-            print("TOTAL CODE EXECUTIONS TUPLE", min_val, max_val)
             total_code_executions_in_prompt = random.randint(min_val, max_val)
         data_point['total_code_executions'] = total_code_executions_in_prompt
         return self.prompt.fill(
