@@ -595,7 +595,6 @@ class OpenAIModel(BaseModel):
                                 "model": self.model,
                                 "messages": prompt,
                                 "max_completion_tokens": tokens_to_generate,
-                                "temperature": temperature,
                                 "top_p": top_p,
                                 "presence_penalty": repetition_penalty,
                                 "seed": random_seed,
@@ -668,7 +667,6 @@ class OpenAIModel(BaseModel):
         try:
             response = self.client.chat.completions.create(
                 model=self.model,
-                temperature=temperature,
                 top_p=top_p,
                 max_completion_tokens=tokens_to_generate,
                 presence_penalty=repetition_penalty,
@@ -691,7 +689,6 @@ class OpenAIModel(BaseModel):
                 LOG.warning("Reached max tokens! Reducing the number of tokens to generate to %d", max_tokens)
                 response = self.client.chat.completions.create(
                     model=self.model,
-                    temperature=temperature,
                     top_p=top_p,
                     max_completion_tokens=max_tokens,
                     presence_penalty=repetition_penalty,
