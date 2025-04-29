@@ -663,7 +663,6 @@ class OpenAIModel(BaseModel):
         try:
             response = self.client.chat.completions.create(
                 model=self.model,
-                top_p=top_p,
                 max_completion_tokens=tokens_to_generate,
                 seed=random_seed,
                 stop=stop_phrases,
