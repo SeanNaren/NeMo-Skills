@@ -595,12 +595,8 @@ class OpenAIModel(BaseModel):
                                 "model": self.model,
                                 "messages": prompt,
                                 "max_completion_tokens": tokens_to_generate,
-                                "top_p": top_p,
-                                "presence_penalty": repetition_penalty,
                                 "seed": random_seed,
                                 "stop": stop_phrases,
-                                "logprobs": top_logprobs is not None,
-                                "top_logprobs": top_logprobs,
                             },
                         }
                     )
@@ -669,12 +665,9 @@ class OpenAIModel(BaseModel):
                 model=self.model,
                 top_p=top_p,
                 max_completion_tokens=tokens_to_generate,
-                presence_penalty=repetition_penalty,
                 seed=random_seed,
                 stop=stop_phrases,
                 messages=prompt,
-                logprobs=top_logprobs is not None,
-                top_logprobs=top_logprobs,
             )
         except openai.BadRequestError as e:
             # this likely only works for Nvidia-hosted models
@@ -689,14 +682,10 @@ class OpenAIModel(BaseModel):
                 LOG.warning("Reached max tokens! Reducing the number of tokens to generate to %d", max_tokens)
                 response = self.client.chat.completions.create(
                     model=self.model,
-                    top_p=top_p,
                     max_completion_tokens=max_tokens,
-                    presence_penalty=repetition_penalty,
                     seed=random_seed,
                     stop=stop_phrases,
                     messages=prompt,
-                    logprobs=top_logprobs is not None,
-                    top_logprobs=top_logprobs,
                     timeout=timeout,
                 )
             else:
