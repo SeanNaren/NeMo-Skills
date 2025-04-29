@@ -596,7 +596,6 @@ class OpenAIModel(BaseModel):
                                 "messages": prompt,
                                 "max_completion_tokens": tokens_to_generate,
                                 "seed": random_seed,
-                                "stop": stop_phrases,
                             },
                         }
                     )
@@ -665,7 +664,6 @@ class OpenAIModel(BaseModel):
                 model=self.model,
                 max_completion_tokens=tokens_to_generate,
                 seed=random_seed,
-                stop=stop_phrases,
                 messages=prompt,
             )
         except openai.BadRequestError as e:
@@ -683,7 +681,6 @@ class OpenAIModel(BaseModel):
                     model=self.model,
                     max_completion_tokens=max_tokens,
                     seed=random_seed,
-                    stop=stop_phrases,
                     messages=prompt,
                     timeout=timeout,
                 )
