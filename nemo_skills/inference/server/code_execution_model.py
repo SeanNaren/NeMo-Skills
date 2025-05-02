@@ -174,7 +174,6 @@ class CodeExecutionWrapper:
                     traceback_verbosity=self.config.sandbox_traceback_verbosity,
                 )
                 remaining_code_executions = None
-                print("Add remaining code executions: ", self.config.add_remaining_code_executions)
                 if self.config.add_remaining_code_executions:
                     remaining_code_executions = self.config.max_code_executions - generation_index - 1
                 # adding code output to the prompt
