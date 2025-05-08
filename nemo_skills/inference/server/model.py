@@ -538,7 +538,7 @@ class OpenAIModel(BaseModel):
         **kwargs,
     ):
         super().__init__(**kwargs)
-        from openai import OpenAI
+        from openai import AzureOpenAI
 
         if model is None:
             model = os.getenv("NEMO_SKILLS_OPENAI_MODEL")
@@ -559,7 +559,7 @@ class OpenAIModel(BaseModel):
                 if not api_key:
                     raise ValueError("OPENAI_API_KEY is required for OpenAI models.")
 
-        self.client = OpenAI(api_key=api_key, base_url=base_url)
+        self.client = AzureOpenAI(api_key=api_key, azure_endpoint=base_url, api_version="2025-04-01-preview")
         self.model = model
         if self.model == "model":  # that's a placeholder, so trying to find real name
             self.model = self.get_model_name_from_server()
