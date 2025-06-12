@@ -1,7 +1,9 @@
-import json
+import logging
+import os.path
 import os.path
 from concurrent.futures import ThreadPoolExecutor
 
+import hydra
 from agentless.fl.combine import combine_file_level
 from agentless.fl.localize import localize_instance, localize_irrelevant, merge
 from agentless.fl.retrieve import retrieve
@@ -16,14 +18,29 @@ from agentless.util.arguments import LocalizationArgs, RetrievalArgs, CombineArg
     SelectRegressionTestsArgs, GenerateTestArgs, RunReproductionTestsArgs, RerankArgs
 from tqdm import tqdm
 
-from nemo_skills.inference.generate import GenerationTask
+from nemo_skills.inference.generate import GenerationTask, GenerateSolutionsConfig
+from nemo_skills.utils import setup_logging, get_logger_name, nested_dataclass
+
+LOG = logging.getLogger(get_logger_name(__file__))
+
+
+@nested_dataclass(kw_only=True)
+class AgentlessConfig(GenerateSolutionsConfig):
+    azure_openai_endpoint: str = ''
+    openai_api_version: str = ''
+    openai_api_key: str = ''
 
 
 class AgentlessGenerationTask(GenerationTask):
-    def __init__(self, *args, **kwargs):
+    def __init__(self, cfg: AgentlessConfig):
         """Initializes the task, thread pool, and a dictionary to track async processes."""
-        super().__init__(*args, **kwargs)
+        super().__init__(cfg)
         self.executor = ThreadPoolExecutor(max_workers=512)
+
+        os.environ['AZURE_OPENAI_ENDPOINT'] = cfg.azure_openai_endpoint
+        os.environ['OPENAI_API_VERSION'] = cfg.openai_api_version
+        os.environ['OPENAI_API_KEY'] = cfg.openai_api_key
+
         self.async_processes = {}
 
     def _localize_suspicious_files(self, data_point, data, save_dir):
@@ -308,3 +325,22 @@ class AgentlessGenerationTask(GenerationTask):
                 self.async_processes[instance_id] = future
                 instance_ids.append(instance_id)
             return instance_ids
+
+
+cs = hydra.core.config_store.ConfigStore.instance()
+cs.store(name="base_agentless_config", node=AgentlessConfig)
+
+GENERATION_TASK_CLASS = AgentlessGenerationTask
+
+
+@hydra.main(version_base=None, config_name='base_agentless_config')
+def agentless(cfg: AgentlessConfig):
+    cfg = AgentlessConfig(_init_nested=True, **cfg)
+    LOG.info("Config used: %s", cfg)
+    task = AgentlessGenerationTask(cfg)
+    task.generate()
+
+
+if __name__ == "__main__":
+    setup_logging()
+    agentless()
