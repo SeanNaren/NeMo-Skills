@@ -29,6 +29,7 @@ class AgentlessConfig(GenerateSolutionsConfig):
     azure_openai_endpoint: str = ''
     openai_api_version: str = ''
     openai_api_key: str = ''
+    preprocessed_data_path: str = ''
 
 
 class AgentlessGenerationTask(GenerationTask):
@@ -40,6 +41,7 @@ class AgentlessGenerationTask(GenerationTask):
         os.environ['AZURE_OPENAI_ENDPOINT'] = cfg.azure_openai_endpoint
         os.environ['OPENAI_API_VERSION'] = cfg.openai_api_version
         os.environ['OPENAI_API_KEY'] = cfg.openai_api_key
+        os.environ['PROJECT_FILE_LOC'] = cfg.preprocessed_data_path
 
         self.async_processes = {}
 
