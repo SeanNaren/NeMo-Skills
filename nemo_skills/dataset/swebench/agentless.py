@@ -1,3 +1,4 @@
+import json
 import logging
 import os.path
 import os.path
@@ -5,8 +6,8 @@ from concurrent.futures import ThreadPoolExecutor
 
 import hydra
 from agentless.fl.combine import combine_file_level
-from agentless.fl.localize import localize_instance, localize_irrelevant, merge
-from agentless.fl.retrieve import retrieve
+from agentless.fl.localize import localize_instance, localize_irrelevant, merge, localize_irrelevant_instance
+from agentless.fl.retrieve import retrieve, retrieve_locs
 from agentless.repair.repair import repair
 from agentless.repair.rerank import normalize_patches, _load_results, majority_voting
 from agentless.test.generate_reproduction_tests import generate_tests, post_process_tests, normalize_tests, \
@@ -16,6 +17,7 @@ from agentless.test.run_reproduction_tests import _run_reproduction_tests
 from agentless.test.select_regression_tests import select_tests
 from agentless.util.arguments import LocalizationArgs, RetrievalArgs, CombineArgs, RepairArgs, RegressionTestsArgs, \
     SelectRegressionTestsArgs, GenerateTestArgs, RunReproductionTestsArgs, RerankArgs
+from agentless.util.utils import load_jsonl
 from tqdm import tqdm
 
 from nemo_skills.inference.generate import GenerationTask, GenerateSolutionsConfig
@@ -39,11 +41,21 @@ class AgentlessGenerationTask(GenerationTask):
         self.executor = ThreadPoolExecutor(max_workers=512)
 
         os.environ['AZURE_OPENAI_ENDPOINT'] = cfg.azure_openai_endpoint
-        os.environ['OPENAI_API_VERSION'] = cfg.openai_api_version
-        os.environ['OPENAI_API_KEY'] = cfg.openai_api_key
+        os.environ['AZURE_OPENAI_API_VERSION'] = cfg.openai_api_version
+        os.environ['OPENAI_API_KEY'] = "EMPTY"
+        os.environ['AZURE_OPENAI_API_KEY'] = cfg.openai_api_key
         os.environ['PROJECT_FILE_LOC'] = cfg.preprocessed_data_path
 
         self.async_processes = {}
+
+    def _create_directories(self, args, output_folder, logdir=None):
+        os.makedirs(output_folder, exist_ok=True)
+        if logdir:
+            os.makedirs(os.path.join(output_folder, logdir), exist_ok=True)
+
+        # write the arguments
+        with open(f"{output_folder}/args.json", "w") as f:
+            json.dump(vars(args), f, indent=4)
 
     def _localize_suspicious_files(self, data_point, data, save_dir):
         args = LocalizationArgs(
@@ -52,9 +64,16 @@ class AgentlessGenerationTask(GenerationTask):
             num_threads=10,
             skip_existing=True,
         )
+        args.output_file = os.path.join(args.output_folder, args.output_file)
+        self._create_directories(
+            args=args,
+            output_folder=args.output_folder,
+            logdir="localization_logs/"
+        )
+
         localize_instance(data_point, args, data, start_file_locs=None, existing_instance_ids=set())
 
-    def _remove_irrelevant_folders(self, save_dir):
+    def _remove_irrelevant_folders(self, data_point, data, save_dir):
         args = LocalizationArgs(
             output_folder=os.path.join(save_dir, "file_level_irrelevant/"),
             file_level=True,
@@ -62,9 +81,15 @@ class AgentlessGenerationTask(GenerationTask):
             num_threads=10,
             skip_existing=True,
         )
-        localize_irrelevant(args)
+        args.output_file = os.path.join(args.output_folder, args.output_file)
+        self._create_directories(
+            args=args,
+            output_folder=args.output_folder,
+            logdir="localization_logs/"
+        )
+        localize_irrelevant_instance(data_point, args, data, existing_instance_ids=set())
 
-    def _retrieve_from_relevant_folders(self, save_dir):
+    def _retrieve_from_relevant_folders(self, data_point, data, save_dir):
         args = RetrievalArgs(
             index_type="simple",
             filter_type="given_files",
@@ -73,7 +98,14 @@ class AgentlessGenerationTask(GenerationTask):
             persist_dir=os.path.join(save_dir, "embedding/"),
             num_threads=10,
         )
-        retrieve(args)
+        args.output_file = os.path.join(args.output_folder, args.output_file)
+        self._create_directories(
+            args=args,
+            output_folder=args.output_folder,
+            logdir="retrieval_logs/"
+        )
+        found_files = load_jsonl(args.filter_file) if args.filter_file else []
+        retrieve_locs(data_point, args, data, found_files, prev_o=[], write_lock=None)
 
     def _merge_localizations(self, save_dir):
         args = CombineArgs(
@@ -81,6 +113,11 @@ class AgentlessGenerationTask(GenerationTask):
             model_loc_file=os.path.join(save_dir, "file_level/loc_outputs.jsonl"),
             top_n=3,
             output_folder=os.path.join(save_dir, "file_level_combined/")
+        )
+        args.output_file = os.path.join(args.output_folder, args.output_file)
+        self._create_directories(
+            args=args,
+            output_folder=args.output_folder,
         )
         combine_file_level(args)
 
@@ -95,7 +132,14 @@ class AgentlessGenerationTask(GenerationTask):
             num_threads=10,
             skip_existing=True
         )
-        localize_instance(data_point, args, data, start_file_locs=None, existing_instance_ids=set())
+        args.output_file = os.path.join(args.output_folder, args.output_file)
+        self._create_directories(
+            args=args,
+            output_folder=args.output_folder,
+            logdir="localization_logs/"
+        )
+        start_file_locs = load_jsonl(args.start_file) if args.start_file else None
+        localize_instance(data_point, args, data, start_file_locs=start_file_locs, existing_instance_ids=set())
 
     def _localize_to_edit_locations(self, data_point, data, save_dir):
         args = LocalizationArgs(
@@ -109,7 +153,14 @@ class AgentlessGenerationTask(GenerationTask):
             num_threads=10,
             skip_existing=True
         )
-        localize_instance(data_point, args, data, start_file_locs=None, existing_instance_ids=set())
+        args.output_file = os.path.join(args.output_folder, args.output_file)
+        self._create_directories(
+            args=args,
+            output_folder=args.output_folder,
+            logdir="localization_logs/"
+        )
+        start_file_locs = load_jsonl(args.start_file) if args.start_file else None
+        localize_instance(data_point, args, data, start_file_locs=start_file_locs, existing_instance_ids=set())
 
     def _separate_edit_locations(self, save_dir):
         args = LocalizationArgs(
@@ -118,6 +169,12 @@ class AgentlessGenerationTask(GenerationTask):
             top_n=3,
             num_samples=4,
             start_file=os.path.join(save_dir, "edit_location_samples/loc_outputs.jsonl"),
+        )
+        args.output_file = os.path.join(args.output_folder, args.output_file)
+        self._create_directories(
+            args=args,
+            output_folder=args.output_folder,
+            logdir="localization_logs/"
         )
         merge(args)
 
@@ -135,6 +192,12 @@ class AgentlessGenerationTask(GenerationTask):
                 gen_and_process=True,
                 num_threads=2,
             )
+            self._create_directories(
+                args=args,
+                output_folder=args.output_folder,
+                logdir="repair_logs/"
+            )
+            args.output_file = os.path.join(args.output_folder, "output.jsonl")
             repair(args)
 
     def _prepare_regression_tests(self, save_dir):
@@ -144,11 +207,17 @@ class AgentlessGenerationTask(GenerationTask):
         )
         _run_regression(run_args)
 
-        select_args = SelectRegressionTestsArgs(
+        args = SelectRegressionTestsArgs(
             passing_tests=run_args.output_file,
             output_folder=os.path.join(save_dir, "select_regression/"),
         )
-        select_tests(select_args)
+        args.output_file = os.path.join(args.output_folder, "output.jsonl")
+        self._create_directories(
+            args=args,
+            output_folder=args.output_folder,
+            logdir="select_test_logs/"
+        )
+        select_tests(args)
 
     def _run_regression_on_patches(self, save_dir, num_repair_samples):
         for i in range(1, num_repair_samples + 2):
@@ -173,6 +242,11 @@ class AgentlessGenerationTask(GenerationTask):
             num_threads=10,
         )
         args.output_file = os.path.join(args.output_folder, "output.jsonl")
+        self._create_directories(
+            args=args,
+            output_folder=args.output_folder,
+            logdir="generating_test_logs/"
+        )
         generate_tests(args)
         args.raw_output_file = args.output_file
         for i in range(args.max_samples):
@@ -200,6 +274,11 @@ class AgentlessGenerationTask(GenerationTask):
             output_folder=os.path.join(save_dir, "reproduction_test_samples/"),
             output_file="reproduction_tests.jsonl",
             select=True,
+        )
+        self._create_directories(
+            args=args,
+            output_folder=args.output_folder,
+            logdir="generating_test_logs/"
         )
         normalize_tests(args)
         test_selection(args)
@@ -246,10 +325,10 @@ class AgentlessGenerationTask(GenerationTask):
         self._localize_suspicious_files(data_point, data, save_dir)
 
         # 2. Remove irrelevant folders before running embedding-based retrieval localization.
-        self._remove_irrelevant_folders(save_dir)
+        self._remove_irrelevant_folders(data_point, data, save_dir)
 
         # 3. Retrieval from relevant folders, filtering out irrelevant files.
-        self._retrieve_from_relevant_folders(save_dir)
+        self._retrieve_from_relevant_folders(data_point, data, save_dir)
 
         # 4. Merge LLM-predicted suspicious files with embedding-based retrieval, create final releveant files.
         self._merge_localizations(save_dir)
@@ -299,10 +378,7 @@ class AgentlessGenerationTask(GenerationTask):
             if instance_id in self.async_processes:
                 future = self.async_processes[instance_id]
                 if future.done():
-                    try:
-                        generations[idx] = future.result()
-                    except Exception as e:
-                        generations[idx] = {"error": str(e)}
+                    generations[idx] = future.result()
         return requests_in_progress, generations
 
     def llm_generate(self, data_points, data, is_async=False):
