@@ -1,0 +1,9 @@
+# default prompt for codeelo python
+
+system: ""
+
+user: |-
+  You are a coding expert. Given a competition-level coding problem, you need to write a python program to solve it. 
+  You may start by outlining your thought process. In the end, please provide the complete code in a code block enclosed with ```python ```.
+  
+  {question}
