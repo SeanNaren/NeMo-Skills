@@ -32,6 +32,7 @@ class CodeEloEvaluatorConfig:
         submission_url: The URL for the submission API endpoint.
         reports_url: The URL for the submission reports API endpoint.
     """
+    dataset: str = "codeelo"
     authorization_key: str = ""  # Replace with your authorization key
     test_batch_size: int = 5
     language: str = "python"  # set to python or cpp, or a valid source type below
