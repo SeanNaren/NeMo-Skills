@@ -2,6 +2,7 @@ import json
 import logging
 import os.path
 import os.path
+import shutil
 from concurrent.futures import ThreadPoolExecutor
 
 import hydra
@@ -93,7 +94,7 @@ class AgentlessGenerationTask(GenerationTask):
         # causes an error internally if this exists already.
         persist_dir = os.path.join(save_dir, "embedding/")
         if os.path.exists(persist_dir):
-            os.rmdir(persist_dir)
+            shutil.rmtree(persist_dir)
         args = RetrievalArgs(
             index_type="simple",
             filter_type="given_files",
