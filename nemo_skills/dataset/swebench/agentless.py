@@ -90,12 +90,16 @@ class AgentlessGenerationTask(GenerationTask):
         localize_irrelevant_instance(data_point, args, data, existing_instance_ids=set())
 
     def _retrieve_from_relevant_folders(self, data_point, data, save_dir):
+        # causes an error internally if this exists already.
+        persist_dir = os.path.join(save_dir, "embedding/")
+        if os.path.exists(persist_dir):
+            os.rmdir(persist_dir)
         args = RetrievalArgs(
             index_type="simple",
             filter_type="given_files",
             filter_file=os.path.join(save_dir, "file_level_irrelevant/loc_outputs.jsonl"),
             output_folder=os.path.join(save_dir, "retrieval_embedding/"),
-            persist_dir=os.path.join(save_dir, "embedding/"),
+            persist_dir=persist_dir,
             num_threads=10,
         )
         args.output_file = os.path.join(args.output_folder, args.output_file)
