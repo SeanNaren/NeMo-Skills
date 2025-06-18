@@ -349,27 +349,27 @@ class AgentlessGenerationTask(GenerationTask):
         # 10. Ask the LLM to remove any tests that should not be ran.
         self._prepare_regression_tests(save_dir)
 
-        # 11. Run the selected tests on the generated repair patches.
-        self._run_regression_on_patches(save_dir, num_additional_repair_samples)
-
-        # 12. Generate reproduction tests to see if it solves the original issues using LLM.
-        self._generate_reproduction_tests(save_dir)
-
-        # 13. Run reproduction tests to see if they can reproduce the issue, and filter those that do not.
-        self._run_and_filter_reproduction_tests(save_dir)
-
-        # 14. Apply majority voting to select one reproduction test per issue.
-        self._select_final_reproduction_test(save_dir)
-
-        # 15. Evaluate generated patches using selected reproduction test.
-        self._evaluate_patches_with_repro_tests(save_dir, num_additional_repair_samples)
-
-        # 16. Perform re-ranking using the regression/reproduction test results to select final patch.
-        self._rerank_and_select_final_patch(
-            save_dir,
-            save_file='all_preds.jsonl',
-            num_repair_samples=num_additional_repair_samples
-        )
+        # # 11. Run the selected tests on the generated repair patches.
+        # self._run_regression_on_patches(save_dir, num_additional_repair_samples)
+        #
+        # # 12. Generate reproduction tests to see if it solves the original issues using LLM.
+        # self._generate_reproduction_tests(save_dir)
+        #
+        # # 13. Run reproduction tests to see if they can reproduce the issue, and filter those that do not.
+        # self._run_and_filter_reproduction_tests(save_dir)
+        #
+        # # 14. Apply majority voting to select one reproduction test per issue.
+        # self._select_final_reproduction_test(save_dir)
+        #
+        # # 15. Evaluate generated patches using selected reproduction test.
+        # self._evaluate_patches_with_repro_tests(save_dir, num_additional_repair_samples)
+        #
+        # # 16. Perform re-ranking using the regression/reproduction test results to select final patch.
+        # self._rerank_and_select_final_patch(
+        #     save_dir,
+        #     save_file='all_preds.jsonl',
+        #     num_repair_samples=num_additional_repair_samples
+        # )
         return {"completed": True, 'generation': os.path.join(save_dir, 'all_preds.jsonl')}
 
     def get_llm_generations(self, requests_in_progress, generations):
