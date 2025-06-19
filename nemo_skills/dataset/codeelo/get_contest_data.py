@@ -6,11 +6,13 @@ import os
 from tqdm import tqdm
 
 CONTEST_IDS = sorted({
-    1971, 1972, 1973, 1974, 1975, 1976, 1977, 1978, 1979, 1980, 1981, 1982, 1983,
-    1984, 1985, 1986, 1987, 1988, 1989, 1990, 1991, 1992, 1993, 1994, 1995, 1996,
-    1997, 1998, 1999, 2000, 2001, 2002, 2003, 2004, 2005, 2006, 2007, 2008, 2013,
-    2014, 2018, 2019, 2020, 2021, 2022, 2023, 2024, 2025, 2026, 2027, 2028, 2029,
-    2030, 2032, 2033, 2035, 2036,
+    1579, 1580, 1581, 1582, 1586, 1591, 1594, 1598, 1601, 1603, 1604, 1606, 1607,
+    1608, 1613, 1615, 1617, 1618, 1619, 1620, 1622, 1623, 1909, 1916, 1919, 1942,
+    1943, 1951, 1965, 1967, 1971, 1972, 1973, 1974, 1975, 1976, 1977, 1978,
+    1979, 1980, 1981, 1982, 1983, 1984, 1985, 1986, 1987, 1988, 1989, 1990,
+    1991, 1992, 1993, 1994, 1995, 1996, 1997, 1998, 1999, 2000, 2001, 2002,
+    2003, 2004, 2005, 2006, 2007, 2008, 2013, 2014, 2018, 2019, 2020, 2021, 2022,
+    2023, 2024, 2025, 2026, 2027, 2028, 2029, 2030, 2032, 2033, 2035, 2036
 })
 
 
@@ -29,7 +31,8 @@ def fetch_contest_data(contest_id):
     standings_data = standings_resp.json()
     ratings_data = ratings_resp.json()
 
-    standings_rows = standings_data['result']['rows']
+    standings_result_obj = standings_data['result']
+    standings_rows = standings_result_obj['rows']
     rating_results = ratings_data['result']
 
     standings_handles = {row['party']['members'][0]['handle'] for row in standings_rows}
@@ -39,15 +42,14 @@ def fetch_contest_data(contest_id):
     filtered_standings = [row for row in standings_rows if row['party']['members'][0]['handle'] in common_handles]
     filtered_ratings = [change for change in rating_results if change['handle'] in common_handles]
 
-    return {'rows': filtered_standings}, filtered_ratings
+    standings_result_obj['rows'] = filtered_standings
+
+    return standings_result_obj, filtered_ratings
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="Fetch Codeforces contest standings "
-                    "and rating changes for simulating Elo rating."
-    )
-    parser.add_argument('--output_file', default="cf_ratings.json", type=str)
+    parser = argparse.ArgumentParser(description="Fetch Codeforces contest standings and rating changes.")
+    parser.add_argument('--output_file', default='cf_ratings.json', type=str, help='Output JSON file path')
     args = parser.parse_args()
 
     all_contest_data = {}
@@ -66,8 +68,8 @@ def main():
         print(f"Processing {len(contests_to_fetch)} new contests.")
 
         for contest_id in tqdm(contests_to_fetch, desc="Fetching new contest data"):
-            standings, ratings = fetch_contest_data(contest_id)
-            all_contest_data[contest_id] = {"standings": standings, "rating_changes": ratings}
+            standings_result, ratings_result = fetch_contest_data(contest_id)
+            all_contest_data[contest_id] = {"standings": standings_result, "rating_changes": ratings_result}
 
     with open(args.output_file, 'w') as f:
         json.dump(all_contest_data, f, separators=(',', ':'))

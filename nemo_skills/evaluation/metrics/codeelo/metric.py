@@ -121,6 +121,7 @@ class CodeEloMetrics(BaseMetrics):
     def reset(self):
         """Resets only the accumulated submission history for the instance."""
         self.submissions_by_contest = defaultdict(lambda: defaultdict(list))
+        self.max_k = 0
 
     def update(self, predictions):
         """
@@ -128,16 +129,15 @@ class CodeEloMetrics(BaseMetrics):
         Args:
             predictions (list[dict]): ... (rest of docstring) ...
         """
-        if len(predictions) > 1:
-            self.agg_mode = f"pass@{len(predictions)}"
-        elif len(predictions) == 1:
-            self.agg_mode = "greedy"
+        if self.max_k > 0 and len(predictions) != self.max_k:
+            raise ValueError(
+                f"Expected {self.max_k} predictions, but got {len(predictions)}. "
+                "This is likely due to a mismatch in the number of generations for different test examples."
+            )
+        if self.max_k == 0:
+            self.max_k = len(predictions)
 
         for pred in predictions:
-            if 'interactive problem' in pred['question'].lower():
-                print('skipping interactive problem, by setting them correct', pred['cf_contest_id'], pred['cf_index'])
-                continue
-                # continue
             contest_id = int(pred['cf_contest_id'])
             index = str(pred['cf_index'])
             is_correct = bool(pred['is_correct'])
@@ -169,4 +169,10 @@ class CodeEloMetrics(BaseMetrics):
         print(f"Elo ratings obtained for {len(elo_ratings)} contests: {[f'{r:.2f}' for r in elo_ratings]}")
         print(f"Average Elo: {average_elo:.2f}")
 
-        return {self.agg_mode: {"elo rating": str(round(average_elo))}}
+        return {self.max_k: {f"elo@{self.max_k}": str(round(average_elo))}}
+
+    def evaluations_to_print(self):
+        return [f"elo@{self.max_k}"]
+
+    def metrics_to_print(self):
+        return

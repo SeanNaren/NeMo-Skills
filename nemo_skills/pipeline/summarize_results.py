@@ -284,9 +284,9 @@ def summarize_results(
             #       an extra aggregation to print
             has_greedy = False
 
-            if Path(f'{benchmark_path}/output.jsonl').exists():
+            if Path(f'{benchmark_path}/output_eval_results.jsonl').exists():
                 has_greedy = True
-                metrics = metrics_calculator.compute_metrics(input_files=[f"{benchmark_path}/output.jsonl"])
+                metrics = metrics_calculator.compute_metrics(input_files=[f"{benchmark_path}/output_eval_results.jsonl"])
                 if len(metrics) > 1:  # has subsets
                     for subset, subset_metrics in metrics.items():
                         results[f"{benchmark}-{subset}"].update(subset_metrics)
