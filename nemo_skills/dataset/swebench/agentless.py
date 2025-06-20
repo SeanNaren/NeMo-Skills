@@ -9,7 +9,7 @@ import hydra
 from agentless.fl.combine import combine_file_level
 from agentless.fl.localize import localize_instance, merge, localize_irrelevant_instance
 from agentless.fl.retrieve import retrieve_locs
-from agentless.repair.repair import repair
+from agentless.repair.repair import repair, post_process_repair
 from agentless.repair.rerank import normalize_patches, _load_results, majority_voting
 from agentless.test.generate_reproduction_tests import post_process_tests, normalize_tests, \
     test_selection, gen_test
@@ -203,7 +203,29 @@ class AgentlessGenerationTask(GenerationTask):
                 logdir="repair_logs/"
             )
             args.output_file = os.path.join(args.output_folder, "output.jsonl")
-            repair(args)
+
+            if args.post_process:
+                args.raw_output_file = args.output_file
+                if args.select_id == -1:
+                    args.output_file = args.raw_output_file.replace(
+                        ".jsonl", "_processed.jsonl"
+                    )
+                else:
+                    args.output_file = args.raw_output_file.replace(
+                        ".jsonl", f"_{args.select_id}_processed.jsonl"
+                    )
+                post_process_repair(args)
+            elif args.gen_and_process:
+                repair(args)
+                args.raw_output_file = args.output_file
+                for i in range(args.max_samples):
+                    args.output_file = args.raw_output_file.replace(
+                        ".jsonl", f"_{i}_processed.jsonl"
+                    )
+                    args.select_id = i
+                    post_process_repair(args)
+            else:
+                repair(args)
 
     def _prepare_regression_tests(self, save_dir, instance_id):
         run_args = RegressionTestsArgs(
@@ -385,6 +407,7 @@ class AgentlessGenerationTask(GenerationTask):
             save_file='all_preds.jsonl',
             num_repair_samples=num_additional_repair_samples
         )
+        # todo: remove this once we've managed to get a sample working.
         raise ValueError
         return {"completed": True, 'generation': os.path.join(save_dir, 'all_preds.jsonl')}
 
