@@ -293,7 +293,7 @@ def summarize_results(
                 else:
                     results[benchmark].update(metrics['all'])
 
-            sampling_outputs = glob.glob(f'{benchmark_path}/output-rs*.jsonl')
+            sampling_outputs = glob.glob(f'{benchmark_path}/output-rs*_eval_results.jsonl')
             if len(sampling_outputs) > 0:
                 metrics = metrics_calculator.compute_metrics(input_files=sampling_outputs)
                 if len(metrics) > 1:  # has subsets
