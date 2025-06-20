@@ -7,12 +7,12 @@ from concurrent.futures import ThreadPoolExecutor
 
 import hydra
 from agentless.fl.combine import combine_file_level
-from agentless.fl.localize import localize_instance, localize_irrelevant, merge, localize_irrelevant_instance
-from agentless.fl.retrieve import retrieve, retrieve_locs
+from agentless.fl.localize import localize_instance, merge, localize_irrelevant_instance
+from agentless.fl.retrieve import retrieve_locs
 from agentless.repair.repair import repair
 from agentless.repair.rerank import normalize_patches, _load_results, majority_voting
-from agentless.test.generate_reproduction_tests import generate_tests, post_process_tests, normalize_tests, \
-    test_selection
+from agentless.test.generate_reproduction_tests import post_process_tests, normalize_tests, \
+    test_selection, gen_test
 from agentless.test.run_regression_tests import _run_regression
 from agentless.test.run_reproduction_tests import _run_reproduction_tests
 from agentless.test.select_regression_tests import select_tests
@@ -205,16 +205,18 @@ class AgentlessGenerationTask(GenerationTask):
             args.output_file = os.path.join(args.output_folder, "output.jsonl")
             repair(args)
 
-    def _prepare_regression_tests(self, save_dir):
+    def _prepare_regression_tests(self, save_dir, instance_id):
         run_args = RegressionTestsArgs(
             run_id="generate_regression_tests",
-            output_file=os.path.join(save_dir, "passing_tests.jsonl")
+            output_file=os.path.join(save_dir, "passing_tests.jsonl"),
+            instance_ids=[instance_id]
         )
         _run_regression(run_args)
 
         args = SelectRegressionTestsArgs(
             passing_tests=run_args.output_file,
             output_folder=os.path.join(save_dir, "select_regression/"),
+            instance_ids=[instance_id]
         )
         args.output_file = os.path.join(args.output_folder, "output.jsonl")
         self._create_directories(
@@ -224,7 +226,7 @@ class AgentlessGenerationTask(GenerationTask):
         )
         select_tests(args)
 
-    def _run_regression_on_patches(self, save_dir, num_repair_samples):
+    def _run_regression_on_patches(self, save_dir, num_repair_samples, instance_id):
         for i in range(1, num_repair_samples + 2):
             folder_name = f"repair_sample_{i}"
 
@@ -233,6 +235,7 @@ class AgentlessGenerationTask(GenerationTask):
                     regression_tests=os.path.join(save_dir, "select_regression/output.jsonl"),
                     predictions_path=os.path.join(save_dir, folder_name, f"output_{num}_processed.jsonl"),
                     run_id=f"{folder_name}_regression_{num}",
+                    instance_ids=[instance_id],
                     num_workers=10
                 )
                 _run_regression(args)
@@ -240,7 +243,7 @@ class AgentlessGenerationTask(GenerationTask):
             with ThreadPoolExecutor(max_workers=10) as executor:
                 executor.map(run_single, range(10))
 
-    def _generate_reproduction_tests(self, save_dir):
+    def _generate_reproduction_tests(self, save_dir, instance_id , data):
         args = GenerateTestArgs(
             max_samples=40,
             output_folder=os.path.join(save_dir, "reproduction_test_samples/"),
@@ -252,19 +255,25 @@ class AgentlessGenerationTask(GenerationTask):
             output_folder=args.output_folder,
             logdir="generating_test_logs/"
         )
-        generate_tests(args)
+        gen_test(
+            instance_id=instance_id,
+            args=args,
+            swe_bench_data=data,
+            prev_o=[],
+        )
         args.raw_output_file = args.output_file
         for i in range(args.max_samples):
             args.output_file = args.raw_output_file.replace(".jsonl", f"_{i}_processed_reproduction_test.jsonl")
             args.select_id = i
             post_process_tests(args)
 
-    def _run_and_filter_reproduction_tests(self, save_dir):
+    def _run_and_filter_reproduction_tests(self, save_dir, instance_id):
         def run_single(num):
             args = RunReproductionTestsArgs(
                 run_id=f"reproduction_test_generation_filter_sample_{num}",
                 test_jsonl=os.path.join(save_dir,
                                         f"reproduction_test_samples/output_{num}_processed_reproduction_test.jsonl"),
+                instance_ids=[instance_id],
                 num_workers=6,
                 testing=True
             )
@@ -288,7 +297,7 @@ class AgentlessGenerationTask(GenerationTask):
         normalize_tests(args)
         test_selection(args)
 
-    def _evaluate_patches_with_repro_tests(self, save_dir, num_repair_samples):
+    def _evaluate_patches_with_repro_tests(self, save_dir, num_repair_samples, instance_id):
         for i in range(num_repair_samples + 2):
             run_id_prefix = f"repair_sample_{i}"
 
@@ -297,6 +306,7 @@ class AgentlessGenerationTask(GenerationTask):
                     test_jsonl="results/swe-bench-lite/reproduction_test_samples/reproduction_tests.jsonl",
                     predictions_path=os.path.join(save_dir, f"{run_id_prefix}/output_{num}_processed.jsonl"),
                     run_id=f"{run_id_prefix}_reproduction_{num}",
+                    instance_ids=[instance_id],
                     num_workers=10
                 )
                 _run_reproduction_tests(args)
@@ -352,29 +362,30 @@ class AgentlessGenerationTask(GenerationTask):
 
         # 9. Select regression tests (already exist in repo) to run. Select passing tests.
         # 10. Ask the LLM to remove any tests that should not be ran.
-        self._prepare_regression_tests(save_dir)
+        self._prepare_regression_tests(save_dir, instance_id=data_point['instance_id'])
 
-        # # 11. Run the selected tests on the generated repair patches.
-        # self._run_regression_on_patches(save_dir, num_additional_repair_samples)
-        #
-        # # 12. Generate reproduction tests to see if it solves the original issues using LLM.
-        # self._generate_reproduction_tests(save_dir)
-        #
-        # # 13. Run reproduction tests to see if they can reproduce the issue, and filter those that do not.
-        # self._run_and_filter_reproduction_tests(save_dir)
-        #
-        # # 14. Apply majority voting to select one reproduction test per issue.
-        # self._select_final_reproduction_test(save_dir)
-        #
-        # # 15. Evaluate generated patches using selected reproduction test.
-        # self._evaluate_patches_with_repro_tests(save_dir, num_additional_repair_samples)
-        #
-        # # 16. Perform re-ranking using the regression/reproduction test results to select final patch.
-        # self._rerank_and_select_final_patch(
-        #     save_dir,
-        #     save_file='all_preds.jsonl',
-        #     num_repair_samples=num_additional_repair_samples
-        # )
+        # 11. Run the selected tests on the generated repair patches.
+        self._run_regression_on_patches(save_dir, num_additional_repair_samples, instance_id=data_point['instance_id'])
+
+        # 12. Generate reproduction tests to see if it solves the original issues using LLM.
+        self._generate_reproduction_tests(save_dir, instance_id=data_point['instance_id'], data=data)
+
+        # 13. Run reproduction tests to see if they can reproduce the issue, and filter those that do not.
+        self._run_and_filter_reproduction_tests(save_dir, instance_id=data_point['instance_id'])
+
+        # 14. Apply majority voting to select one reproduction test per issue.
+        self._select_final_reproduction_test(save_dir)
+
+        # 15. Evaluate generated patches using selected reproduction test.
+        self._evaluate_patches_with_repro_tests(save_dir, num_additional_repair_samples, instance_id=data_point['instance_id'])
+
+        # 16. Perform re-ranking using the regression/reproduction test results to select final patch.
+        self._rerank_and_select_final_patch(
+            save_dir,
+            save_file='all_preds.jsonl',
+            num_repair_samples=num_additional_repair_samples
+        )
+        raise ValueError
         return {"completed": True, 'generation': os.path.join(save_dir, 'all_preds.jsonl')}
 
     def get_llm_generations(self, requests_in_progress, generations):
