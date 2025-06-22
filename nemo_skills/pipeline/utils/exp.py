@@ -87,7 +87,7 @@ def get_sandbox_command(cluster_config):
     if cluster_config['executor'] == 'none':
         raise ValueError("Currently does not support no docker execution, as an instance container is always required."
                          "Please start the instance container separately, and remove the with_sandbox flag.")
-    return "cd /server && ./entrypoint.sh"
+    return "cd /server && chmod +x ./entrypoint.sh && ./entrypoint.sh"
 
 
 @dataclass(kw_only=True)
