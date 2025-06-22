@@ -85,8 +85,9 @@ def get_exp_handles(expname: str, ignore_finished=True, ignore_exp_not_exists=Tr
 
 def get_sandbox_command(cluster_config):
     if cluster_config['executor'] == 'none':
-        return "python -m nemo_skills.code_execution.local_sandbox.local_sandbox_server"
-    return "/entrypoint.sh && /start.sh"
+        raise ValueError("Currently does not support no docker execution, as an instance container is always required."
+                         "Please start the instance container separately, and remove the with_sandbox flag.")
+    return "cd /server && ./entrypoint.sh"
 
 
 @dataclass(kw_only=True)
@@ -401,6 +402,16 @@ def add_task(
                     override = override[11:]
                 sandbox_env_updates["PYTHONPATH"] = override + ":/app"
 
+        # todo: this is a hack to get the server.py and entrypoint script mounted into the sandbox container
+        server_dir = os.getenv("AGENTLESS_SERVER_DIR", "")
+        if not server_dir:
+            raise ValueError("You did not provide an agentless server directory which contains the server.py and entrypoint.sh."
+                             "Please provide this by passing AGENTLESS_SERVER_DIR to the run command."
+                             "Ensure this is available on the cluster you wish to run on.")
+
+        entrypoint_mounts = [f"{server_dir}:/server"]
+
+
         with temporary_env_update(cluster_config, sandbox_env_updates):
             commands.append(get_sandbox_command(cluster_config))
             sandbox_executor = get_executor(
@@ -411,7 +422,7 @@ def add_task(
                 gpus_per_node=num_gpus,
                 partition=partition,
                 time_min=time_min,
-                mounts=tuple(),  # we don't want to mount anything
+                mounts=entrypoint_mounts,
                 dependencies=dependencies,
                 job_name=task_name,
                 log_dir=log_dir,

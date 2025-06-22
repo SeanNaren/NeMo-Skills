@@ -47,6 +47,10 @@ class AgentlessGenerationTask(GenerationTask):
         os.environ['AZURE_OPENAI_API_KEY'] = cfg.openai_api_key
         os.environ['PROJECT_FILE_LOC'] = cfg.preprocessed_data_path
 
+        # todo: agentless internally hardcodes this path to store some logging information, and progress cache.
+        if os.path.exists("logs/"):
+            shutil.rmtree("logs/")
+
         self.async_processes = {}
 
     def _create_directories(self, args, output_folder, logdir=None):
@@ -325,7 +329,7 @@ class AgentlessGenerationTask(GenerationTask):
 
             def run_single(num):
                 args = RunReproductionTestsArgs(
-                    test_jsonl="results/swe-bench-lite/reproduction_test_samples/reproduction_tests.jsonl",
+                    test_jsonl=os.path.join(save_dir, "reproduction_test_samples/reproduction_tests.jsonl"),
                     predictions_path=os.path.join(save_dir, f"{run_id_prefix}/output_{num}_processed.jsonl"),
                     run_id=f"{run_id_prefix}_reproduction_{num}",
                     instance_ids=[instance_id],
