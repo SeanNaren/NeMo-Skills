@@ -276,6 +276,7 @@ def generate(
                     script=generation_module,
                 )
                 prev_tasks = None
+                print("SETTING PORT TO 6132")
                 for _ in range(dependent_jobs + 1):
                     task_name = f'{expname}-rs{seed}' if seed is not None else expname
                     if chunk_id is not None:
@@ -291,7 +292,7 @@ def generate(
                         time_min=time_min,
                         server_config=server_config,
                         with_sandbox=with_sandbox,
-                        sandbox_port=None if get_random_port else 6000,
+                        sandbox_port=6132,
                         run_after=run_after,
                         reuse_code=reuse_code,
                         reuse_code_exp=reuse_code_exp,
