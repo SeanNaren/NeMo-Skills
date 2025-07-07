@@ -305,7 +305,7 @@ class AgentlessGenerationTask(GenerationTask):
             )
             _run_reproduction_tests(args)
 
-        with ThreadPoolExecutor(max_workers=4) as executor:
+        with ThreadPoolExecutor(max_workers=1) as executor:
             executor.map(run_single, range(0, 40))
 
     def _select_final_reproduction_test(self, save_dir):
@@ -337,7 +337,7 @@ class AgentlessGenerationTask(GenerationTask):
                 )
                 _run_reproduction_tests(args)
 
-            with ThreadPoolExecutor(max_workers=10) as executor:
+            with ThreadPoolExecutor(max_workers=1) as executor:
                 executor.map(run_single, range(10))
 
     def _rerank_and_select_final_patch(self, save_dir, save_file, num_repair_samples):
