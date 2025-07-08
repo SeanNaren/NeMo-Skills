@@ -3,6 +3,7 @@ import logging
 import os.path
 import os.path
 import shutil
+import time
 from concurrent.futures import ThreadPoolExecutor
 
 import hydra
@@ -262,11 +263,11 @@ class AgentlessGenerationTask(GenerationTask):
                     predictions_path=os.path.join(save_dir, folder_name, f"output_{num}_processed.jsonl"),
                     run_id=f"{folder_name}_regression_{num}",
                     instance_ids=[instance_id],
-                    num_workers=10
+                    num_workers=1
                 )
                 _run_regression(args)
 
-            with ThreadPoolExecutor(max_workers=10) as executor:
+            with ThreadPoolExecutor(max_workers=1) as executor:
                 executor.map(run_single, range(10))
 
     def _generate_reproduction_tests(self, save_dir, instance_id , data):
@@ -300,7 +301,7 @@ class AgentlessGenerationTask(GenerationTask):
                 test_jsonl=os.path.join(save_dir,
                                         f"reproduction_test_samples/output_{num}_processed_reproduction_test.jsonl"),
                 instance_ids=[instance_id],
-                num_workers=6,
+                num_workers=1,
                 testing=True
             )
             _run_reproduction_tests(args)
@@ -333,7 +334,7 @@ class AgentlessGenerationTask(GenerationTask):
                     predictions_path=os.path.join(save_dir, f"{run_id_prefix}/output_{num}_processed.jsonl"),
                     run_id=f"{run_id_prefix}_reproduction_{num}",
                     instance_ids=[instance_id],
-                    num_workers=10
+                    num_workers=1
                 )
                 _run_reproduction_tests(args)
 
@@ -362,39 +363,41 @@ class AgentlessGenerationTask(GenerationTask):
         os.makedirs(save_dir, exist_ok=True)
         num_additional_repair_samples = 3
 
-        # # 1. Localize suspicious files using LLM
-        # self._localize_suspicious_files(data_point, data, save_dir)
-        #
-        # # 2. Remove irrelevant folders before running embedding-based retrieval localization.
-        # self._remove_irrelevant_folders(data_point, data, save_dir)
-        #
-        # # 3. Retrieval from relevant folders, filtering out irrelevant files.
-        # self._retrieve_from_relevant_folders(data_point, data, save_dir)
-        #
-        # # 4. Merge LLM-predicted suspicious files with embedding-based retrieval, create final releveant files.
-        # self._merge_localizations(save_dir)
-        #
-        # # 5. Find related elements in suspicious files.
-        # self._find_related_elements(data_point, data, save_dir)
-        #
-        # # 6. Localize to edit locations using related elements.
-        # self._localize_to_edit_locations(data_point, data, save_dir)
-        #
-        # # 7. Separate individual sets of edit locations.
-        # self._separate_edit_locations(save_dir)
-        #
-        # # 8. Generate patches using the LLM for repairing.
-        # self._generate_patches(save_dir, num_additional_repair_samples)
-        #
-        # # 9. Select regression tests (already exist in repo) to run. Select passing tests.
-        # # 10. Ask the LLM to remove any tests that should not be ran.
-        # self._prepare_regression_tests(save_dir, instance_id=data_point['instance_id'])
-        #
-        # # 11. Run the selected tests on the generated repair patches.
-        # self._run_regression_on_patches(save_dir, num_additional_repair_samples, instance_id=data_point['instance_id'])
-        #
-        # # 12. Generate reproduction tests to see if it solves the original issues using LLM.
-        # self._generate_reproduction_tests(save_dir, instance_id=data_point['instance_id'], data=data)
+        start = time.time()
+
+        # 1. Localize suspicious files using LLM
+        self._localize_suspicious_files(data_point, data, save_dir)
+
+        # 2. Remove irrelevant folders before running embedding-based retrieval localization.
+        self._remove_irrelevant_folders(data_point, data, save_dir)
+
+        # 3. Retrieval from relevant folders, filtering out irrelevant files.
+        self._retrieve_from_relevant_folders(data_point, data, save_dir)
+
+        # 4. Merge LLM-predicted suspicious files with embedding-based retrieval, create final releveant files.
+        self._merge_localizations(save_dir)
+
+        # 5. Find related elements in suspicious files.
+        self._find_related_elements(data_point, data, save_dir)
+
+        # 6. Localize to edit locations using related elements.
+        self._localize_to_edit_locations(data_point, data, save_dir)
+
+        # 7. Separate individual sets of edit locations.
+        self._separate_edit_locations(save_dir)
+
+        # 8. Generate patches using the LLM for repairing.
+        self._generate_patches(save_dir, num_additional_repair_samples)
+
+        # 9. Select regression tests (already exist in repo) to run. Select passing tests.
+        # 10. Ask the LLM to remove any tests that should not be ran.
+        self._prepare_regression_tests(save_dir, instance_id=data_point['instance_id'])
+
+        # 11. Run the selected tests on the generated repair patches.
+        self._run_regression_on_patches(save_dir, num_additional_repair_samples, instance_id=data_point['instance_id'])
+
+        # 12. Generate reproduction tests to see if it solves the original issues using LLM.
+        self._generate_reproduction_tests(save_dir, instance_id=data_point['instance_id'], data=data)
 
         # 13. Run reproduction tests to see if they can reproduce the issue, and filter those that do not.
         self._run_and_filter_reproduction_tests(save_dir, instance_id=data_point['instance_id'])
@@ -411,6 +414,8 @@ class AgentlessGenerationTask(GenerationTask):
             save_file='all_preds.jsonl',
             num_repair_samples=num_additional_repair_samples
         )
+        print("Time taken for completion:", time.time() - start)
+        raise ValueError
         return {"completed": True, 'generation': os.path.join(save_dir, 'all_preds.jsonl')}
 
     def get_llm_generations(self, requests_in_progress, generations):
