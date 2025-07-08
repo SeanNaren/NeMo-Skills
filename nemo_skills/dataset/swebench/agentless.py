@@ -398,21 +398,19 @@ class AgentlessGenerationTask(GenerationTask):
 
         # 13. Run reproduction tests to see if they can reproduce the issue, and filter those that do not.
         self._run_and_filter_reproduction_tests(save_dir, instance_id=data_point['instance_id'])
-        #
-        # # 14. Apply majority voting to select one reproduction test per issue.
-        # self._select_final_reproduction_test(save_dir)
-        #
-        # # 15. Evaluate generated patches using selected reproduction test.
-        # self._evaluate_patches_with_repro_tests(save_dir, num_additional_repair_samples, instance_id=data_point['instance_id'])
-        #
-        # # 16. Perform re-ranking using the regression/reproduction test results to select final patch.
-        # self._rerank_and_select_final_patch(
-        #     save_dir,
-        #     save_file='all_preds.jsonl',
-        #     num_repair_samples=num_additional_repair_samples
-        # )
-        # todo: remove this once we've managed to get a sample working.
-        raise ValueError
+
+        # 14. Apply majority voting to select one reproduction test per issue.
+        self._select_final_reproduction_test(save_dir)
+
+        # 15. Evaluate generated patches using selected reproduction test.
+        self._evaluate_patches_with_repro_tests(save_dir, num_additional_repair_samples, instance_id=data_point['instance_id'])
+
+        # 16. Perform re-ranking using the regression/reproduction test results to select final patch.
+        self._rerank_and_select_final_patch(
+            save_dir,
+            save_file='all_preds.jsonl',
+            num_repair_samples=num_additional_repair_samples
+        )
         return {"completed": True, 'generation': os.path.join(save_dir, 'all_preds.jsonl')}
 
     def get_llm_generations(self, requests_in_progress, generations):
