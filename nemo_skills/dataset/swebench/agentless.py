@@ -416,52 +416,52 @@ class AgentlessGenerationTask(GenerationTask):
         timings.append(("8. Generate patches", current_time - last_step_time))
         last_step_time = current_time
 
-        # 9. Select regression tests (already exist in repo) to run. Select passing tests.
-        # 10. Ask the LLM to remove any tests that should not be ran.
-        self._prepare_regression_tests(save_dir, instance_id=data_point['instance_id'])
-        current_time = time.time()
-        timings.append(("10. Prepare regression tests", current_time - last_step_time))
-        last_step_time = current_time
-
-        # 11. Run the selected tests on the generated repair patches.
-        self._run_regression_on_patches(save_dir, num_additional_repair_samples, instance_id=data_point['instance_id'])
-        current_time = time.time()
-        timings.append(("11. Run regression on patches", current_time - last_step_time))
-        last_step_time = current_time
-
-        # 12. Generate reproduction tests to see if it solves the original issues using LLM.
-        self._generate_reproduction_tests(save_dir, instance_id=data_point['instance_id'], data=data)
-        current_time = time.time()
-        timings.append(("12. Generate reproduction tests", current_time - last_step_time))
-        last_step_time = current_time
-
-        # 13. Run reproduction tests to see if they can reproduce the issue, and filter those that do not.
-        self._run_and_filter_reproduction_tests(save_dir, instance_id=data_point['instance_id'])
-        current_time = time.time()
-        timings.append(("13. Run and filter reproduction tests", current_time - last_step_time))
-        last_step_time = current_time
-
-        # 14. Apply majority voting to select one reproduction test per issue.
-        self._select_final_reproduction_test(save_dir)
-        current_time = time.time()
-        timings.append(("14. Select final reproduction test", current_time - last_step_time))
-        last_step_time = current_time
-
-        # 15. Evaluate generated patches using selected reproduction test.
-        self._evaluate_patches_with_repro_tests(save_dir, num_additional_repair_samples,
-                                                instance_id=data_point['instance_id'])
-        current_time = time.time()
-        timings.append(("15. Evaluate patches with repro tests", current_time - last_step_time))
-        last_step_time = current_time
-
-        # 16. Perform re-ranking using the regression/reproduction test results to select final patch.
-        self._rerank_and_select_final_patch(
-            save_dir,
-            save_file='all_preds.jsonl',
-            num_repair_samples=num_additional_repair_samples
-        )
-        current_time = time.time()
-        timings.append(("16. Rerank and select final patch", current_time - last_step_time))
+        # # 9. Select regression tests (already exist in repo) to run. Select passing tests.
+        # # 10. Ask the LLM to remove any tests that should not be ran.
+        # self._prepare_regression_tests(save_dir, instance_id=data_point['instance_id'])
+        # current_time = time.time()
+        # timings.append(("10. Prepare regression tests", current_time - last_step_time))
+        # last_step_time = current_time
+        #
+        # # 11. Run the selected tests on the generated repair patches.
+        # self._run_regression_on_patches(save_dir, num_additional_repair_samples, instance_id=data_point['instance_id'])
+        # current_time = time.time()
+        # timings.append(("11. Run regression on patches", current_time - last_step_time))
+        # last_step_time = current_time
+        #
+        # # 12. Generate reproduction tests to see if it solves the original issues using LLM.
+        # self._generate_reproduction_tests(save_dir, instance_id=data_point['instance_id'], data=data)
+        # current_time = time.time()
+        # timings.append(("12. Generate reproduction tests", current_time - last_step_time))
+        # last_step_time = current_time
+        #
+        # # 13. Run reproduction tests to see if they can reproduce the issue, and filter those that do not.
+        # self._run_and_filter_reproduction_tests(save_dir, instance_id=data_point['instance_id'])
+        # current_time = time.time()
+        # timings.append(("13. Run and filter reproduction tests", current_time - last_step_time))
+        # last_step_time = current_time
+        #
+        # # 14. Apply majority voting to select one reproduction test per issue.
+        # self._select_final_reproduction_test(save_dir)
+        # current_time = time.time()
+        # timings.append(("14. Select final reproduction test", current_time - last_step_time))
+        # last_step_time = current_time
+        #
+        # # 15. Evaluate generated patches using selected reproduction test.
+        # self._evaluate_patches_with_repro_tests(save_dir, num_additional_repair_samples,
+        #                                         instance_id=data_point['instance_id'])
+        # current_time = time.time()
+        # timings.append(("15. Evaluate patches with repro tests", current_time - last_step_time))
+        # last_step_time = current_time
+        #
+        # # 16. Perform re-ranking using the regression/reproduction test results to select final patch.
+        # self._rerank_and_select_final_patch(
+        #     save_dir,
+        #     save_file='all_preds.jsonl',
+        #     num_repair_samples=num_additional_repair_samples
+        # )
+        # current_time = time.time()
+        # timings.append(("16. Rerank and select final patch", current_time - last_step_time))
 
         total_time = time.time() - start_time
 
