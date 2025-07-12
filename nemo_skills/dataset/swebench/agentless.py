@@ -35,6 +35,7 @@ class AgentlessConfig(GenerateSolutionsConfig):
     openai_api_key: str = ''
     preprocessed_data_path: str = ''
     stop_after_patch_generation: bool = False
+    instance_id: str = ''
 
 
 class AgentlessGenerationTask(GenerationTask):
@@ -361,6 +362,10 @@ class AgentlessGenerationTask(GenerationTask):
 
     def _run_agentless(self, data_point, data):
         """Runs the full agentless pipeline for a single data point."""
+
+        if self.cfg.instance_id and self.cfg.instance_id != data_point['instance_id']:
+            return {"completed": True, 'generation': 'skipped'}
+        print(f"Starting agentless for instance id {data_point['instance_id']}")
         base_dir = os.path.splitext(self.cfg.output_file)[0] + "/"
         save_dir = os.path.join(base_dir, data_point['instance_id'])
         os.makedirs(save_dir, exist_ok=True)

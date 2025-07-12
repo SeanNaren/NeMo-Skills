@@ -411,12 +411,16 @@ def add_task(
 
         entrypoint_mounts = [f"{server_dir}:/server"]
 
+        sandbox_container_image = cluster_config["containers"]["sandbox"]
+        if os.getenv("SANDBOX_IMAGE"):
+            print(f"setting sandbox image to {sandbox_container_image}")
+            sandbox_container_image = os.environ['SANDBOX_IMAGE']
 
         with temporary_env_update(cluster_config, sandbox_env_updates):
             commands.append(get_sandbox_command(cluster_config))
             sandbox_executor = get_executor(
                 cluster_config=cluster_config,
-                container=cluster_config["containers"]["sandbox"],
+                container=sandbox_container_image,
                 num_nodes=executors[0].nodes if cluster_config["executor"] == "slurm" else 1,
                 tasks_per_node=1,
                 gpus_per_node=num_gpus,
