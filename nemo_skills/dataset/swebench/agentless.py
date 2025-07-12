@@ -41,6 +41,8 @@ class AgentlessGenerationTask(GenerationTask):
     def __init__(self, cfg: AgentlessConfig):
         """Initializes the task, thread pool, and a dictionary to track async processes."""
         super().__init__(cfg)
+        if self.cfg.stop_after_patch_generation:
+            print("Will stop pipeline after patch generation.")
         self.executor = ThreadPoolExecutor(max_workers=512)
 
         os.environ['AZURE_OPENAI_ENDPOINT'] = cfg.azure_openai_endpoint
