@@ -519,10 +519,11 @@ def run_exp(exp, cluster_config, sequential=None):
 
 
 def get_exp(expname, cluster_config):
+    import uuid
     # nemo-run redefines the handlers, so removing ours to avoid duplicate logs
     remove_handlers()
     if cluster_config['executor'] == 'slurm':
-        return run.Experiment(expname)
+        return run.Experiment(expname, id=f'{expname}_{str(os.getpid())}_{str(uuid.uuid4())}')
     # hiding all nemo-run logs otherwise as they are not useful locally
     if cluster_config['executor'] == 'local':
         return run.Experiment(expname, clean_mode=True)

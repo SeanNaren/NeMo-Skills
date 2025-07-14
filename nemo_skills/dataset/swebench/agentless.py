@@ -30,6 +30,7 @@ LOG = logging.getLogger(get_logger_name(__file__))
 
 @nested_dataclass(kw_only=True)
 class AgentlessConfig(GenerateSolutionsConfig):
+    nvidia_api_key: str = ''
     azure_openai_endpoint: str = ''
     openai_api_version: str = ''
     openai_api_key: str = ''
@@ -46,10 +47,13 @@ class AgentlessGenerationTask(GenerationTask):
             print("Will stop pipeline after patch generation.")
         self.executor = ThreadPoolExecutor(max_workers=512)
 
-        os.environ['AZURE_OPENAI_ENDPOINT'] = cfg.azure_openai_endpoint
-        os.environ['AZURE_OPENAI_API_VERSION'] = cfg.openai_api_version
+        if cfg.nvidia_api_key: # prioritize nvidia embedding API.
+            os.environ["NVIDIA_API_KEY"] = cfg.nvidia_api_key
+        else:
+            os.environ['AZURE_OPENAI_ENDPOINT'] = cfg.azure_openai_endpoint
+            os.environ['AZURE_OPENAI_API_VERSION'] = cfg.openai_api_version
+            os.environ['AZURE_OPENAI_API_KEY'] = cfg.openai_api_key
         os.environ['OPENAI_API_KEY'] = "EMPTY"
-        os.environ['AZURE_OPENAI_API_KEY'] = cfg.openai_api_key
         os.environ['PROJECT_FILE_LOC'] = cfg.preprocessed_data_path
 
         # todo: agentless internally hardcodes this path to store some logging information, and progress cache.
