@@ -26,15 +26,16 @@ import tqdm
 from sdp.processors.base_processor import BaseParallelProcessor, DataEntry
 from tqdm.contrib.concurrent import process_map
 
-from nemo_skills.code_execution.math_grader import extract_answer
+from nemo_skills.evaluation.math_grader import extract_answer
 from nemo_skills.prompt.utils import load_config
 from nemo_skills.training.data_preparation_utils.arithmetic_utils import (
     extract_expressions,
     merge_solution_steps,
     solve_expression,
 )
+from nemo_skills.utils import get_logger_name
 
-LOG = logging.getLogger(__file__)
+LOG = logging.getLogger(get_logger_name(__file__))
 
 PREFIX_SOLN = "My solution:\n"
 PATTERN_ANS = re.compile(r"\\boxed\{([^}]*)\}")
@@ -159,6 +160,26 @@ class DropIncorrectCodeBlocks(BaseFilter):
         if len(PATTERN_PYTHON_CODE.findall(data_entry[self.solution_key])) != 1:
             return [DataEntry(data=None, metrics=dict(num_removed=1))]
         return [DataEntry(data=data_entry, metrics=dict(num_removed=0))]
+
+
+class AddCodeExecutionsCounts(BaseFilter):
+    def __init__(self, solution_key: str = "generation", ce_counter_key: str = "total_code_executions", **kwargs):
+        super().__init__(**kwargs)
+        self.solution_key = solution_key
+        self.ce_counter_key = ce_counter_key
+
+    def process_dataset_entry(self, data_entry) -> List:
+        pattern = r"Remaining code executions: (\d+)."
+        allowed_ce = re.search(pattern, data_entry[self.solution_key])
+        counts = 0
+        if not allowed_ce:
+            if "You have run out of code executions!" in data_entry[self.solution_key]:
+                counts = 1
+        else:
+            counts = int(allowed_ce.group(1)) + 1
+
+        data_entry[self.ce_counter_key] = counts
+        return [DataEntry(data=data_entry, metrics=dict(num_modified=1))]
 
 
 class DropIncorrectArithmetic(BaseFilter):
@@ -298,7 +319,7 @@ class TrimSolutions(BaseFilter):
     def process_dataset_entry(self, data_entry) -> List:
         # extracting full boxed answer first
         predicted_answer = extract_answer(data_entry[self.solution_key])
-        
+
         original_solution = data_entry[self.solution_key]
         if predicted_answer is not None:
             predicted_answer = "\\boxed{" + predicted_answer + "}"
@@ -366,13 +387,13 @@ class SplitArithmetic(BaseFilter):
 
 
 class CodeTextFilter(BaseParallelProcessor):
-    def __init__(self, filter_type, prompt_template, solution_key='generation', **kwargs):
+    def __init__(self, filter_type, code_tags, solution_key='generation', **kwargs):
         if 'in_memory_chunksize' not in kwargs:
             kwargs['in_memory_chunksize'] = 100000000
         if 'chunksize' not in kwargs:
             kwargs['chunksize'] = 100000
         super().__init__(**kwargs)
-        self.prompt_template = prompt_template
+        self.code_tags = code_tags
         self.text_filter_type = filter_type
         self.solution_key = solution_key
 
@@ -415,8 +436,8 @@ class CodeTextFilter(BaseParallelProcessor):
         self.prepare()
         os.makedirs(os.path.dirname(self.output_manifest_file), exist_ok=True)
         metrics = []
-        prompt = load_config(self.prompt_template, Path(__file__).absolute().parents[2] / 'prompt' / 'template')
-        code_begin_token = prompt.config.template.code_begin
+        code_tags_config = load_config(self.code_tags, Path(__file__).absolute().parents[2] / 'prompt' / 'code_tags')
+        code_begin_token = code_tags_config.code_begin
 
         with open(self.output_manifest_file, "wt", encoding="utf-8") as fout:
             for manifest_chunk in self._chunk_manifest():

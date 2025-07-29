@@ -12,17 +12,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import importlib
 import json
 import os
 import subprocess
-import sys
 from pathlib import Path
 
 import pytest
 
-sys.path.append(str(Path(__file__).absolute().parents[1]))
 from nemo_skills.evaluation.metrics import ComputeMetrics
+from tests.conftest import docker_rm
 
 # TODO: retrieval test
 
@@ -37,15 +35,18 @@ def test_vllm_generate_greedy():
         pytest.skip("Define NEMO_SKILLS_TEST_MODEL_TYPE to run this test")
     prompt_template = 'llama3-instruct' if model_type == 'llama' else 'qwen-instruct'
 
+    output_dir = f"/tmp/nemo-skills-tests/{model_type}/vllm-generate-greedy/generation"
+    docker_rm([output_dir])
+
     cmd = (
         f"ns generate "
         f"    --cluster test-local --config_dir {Path(__file__).absolute().parent} "
         f"    --model {model_path} "
         f"    --server_type vllm "
-        f"    --output_dir /tmp/nemo-skills-tests/{model_type}/vllm-generate-greedy/generation "
+        f"    --output_dir {output_dir} "
         f"    --server_gpus 1 "
         f"    --server_nodes 1 "
-        f"    ++input_file=/nemo_run/code/nemo_skills/dataset/gsm8k/test.jsonl "
+        f"    --input_file=/nemo_run/code/nemo_skills/dataset/gsm8k/test.jsonl "
         f"    ++prompt_config=generic/math "
         f"    ++prompt_template={prompt_template} "
         f"    ++max_samples=10 "
@@ -53,15 +54,15 @@ def test_vllm_generate_greedy():
     )
     subprocess.run(cmd, shell=True, check=True)
 
-    # no evaluation by default - checking just the number of lines and that there is no is_correct key
-    with open(f"/tmp/nemo-skills-tests/{model_type}/vllm-generate-greedy/generation/output.jsonl") as fin:
+    # no evaluation by default - checking just the number of lines and that there is no symbolic_correct key
+    with open(f"{output_dir}/output.jsonl") as fin:
         lines = fin.readlines()
     assert len(lines) == 10
     for line in lines:
         data = json.loads(line)
-        assert 'is_correct' not in data
+        assert 'symbolic_correct' not in data
         assert 'generation' in data
-    assert os.path.exists(f"/tmp/nemo-skills-tests/{model_type}/vllm-generate-greedy/generation/output.jsonl.done")
+    assert os.path.exists(f"{output_dir}/output.jsonl.done")
 
 
 @pytest.mark.gpu
@@ -74,16 +75,19 @@ def test_vllm_generate_greedy_chunked():
         pytest.skip("Define NEMO_SKILLS_TEST_MODEL_TYPE to run this test")
     prompt_template = 'llama3-instruct' if model_type == 'llama' else 'qwen-instruct'
 
+    output_dir = f"/tmp/nemo-skills-tests/{model_type}/vllm-generate-greedy-chunked/generation"
+    docker_rm([output_dir])
+
     cmd = (
         f"ns generate "
         f"    --cluster test-local --config_dir {Path(__file__).absolute().parent} "
         f"    --model {model_path} "
         f"    --server_type vllm "
-        f"    --output_dir /tmp/nemo-skills-tests/{model_type}/vllm-generate-greedy-chunked/generation "
+        f"    --output_dir {output_dir} "
         f"    --server_gpus 1 "
         f"    --server_nodes 1 "
         f"    --num_chunks 2 "
-        f"    ++input_file=/nemo_run/code/nemo_skills/dataset/gsm8k/test.jsonl "
+        f"    --input_file=/nemo_run/code/nemo_skills/dataset/gsm8k/test.jsonl "
         f"    ++prompt_config=generic/math "
         f"    ++prompt_template={prompt_template} "
         f"    ++max_samples=10 "
@@ -91,15 +95,15 @@ def test_vllm_generate_greedy_chunked():
     )
     subprocess.run(cmd, shell=True, check=True)
 
-    # no evaluation by default - checking just the number of lines and that there is no is_correct key
-    with open(f"/tmp/nemo-skills-tests/{model_type}/vllm-generate-greedy-chunked/generation/output.jsonl") as fin:
+    # no evaluation by default - checking just the number of lines and that there is no symbolic_correct key
+    with open(f"{output_dir}/output.jsonl") as fin:
         lines = fin.readlines()
     assert len(lines) == 20  # because max_samples is the number of samples per chunk
     for line in lines:
         data = json.loads(line)
-        assert 'is_correct' not in data
+        assert 'symbolic_correct' not in data
         assert 'generation' in data
-    assert os.path.exists(f"/tmp/nemo-skills-tests/{model_type}/vllm-generate-greedy/generation/output.jsonl.done")
+    assert os.path.exists(f"{output_dir}/output.jsonl.done")
 
 
 @pytest.mark.gpu
@@ -113,22 +117,24 @@ def test_vllm_generate_seeds():
     if model_type != 'llama':
         pytest.skip("Only running this test for llama models")
 
+    output_dir = f"/tmp/nemo-skills-tests/{model_type}/vllm-generate-seeds/generation"
+    docker_rm([output_dir])
+
     num_seeds = 3
     cmd = (
         f"ns generate "
         f"    --cluster test-local --config_dir {Path(__file__).absolute().parent} "
         f"    --model {model_path} "
         f"    --server_type vllm "
-        f"    --output_dir /tmp/nemo-skills-tests/{model_type}/vllm-generate-seeds/generation "
+        f"    --output_dir {output_dir} "
         f"    --server_gpus 1 "
         f"    --server_nodes 1 "
         f"    --num_random_seeds {num_seeds} "
         f"    --eval_args='++eval_type=math' "
         f"    --with_sandbox "
-        f"    ++dataset=gsm8k "
-        f"    ++split=test "
+        f"    --input_file=/nemo_run/code/nemo_skills/dataset/gsm8k/test.jsonl "
+        f"    ++prompt_config=generic/math "
         f"    ++prompt_template=llama3-instruct "
-        f"    ++split=test "
         f"    ++max_samples=10 "
         f"    ++skip_filled=False "
     )
@@ -136,21 +142,19 @@ def test_vllm_generate_seeds():
 
     # checking that all 3 files are created
     for seed in range(num_seeds):
-        with open(f"/tmp/nemo-skills-tests/{model_type}/vllm-generate-seeds/generation/output-rs{seed}.jsonl") as fin:
+        with open(f"{output_dir}/output-rs{seed}.jsonl") as fin:
             lines = fin.readlines()
         assert len(lines) == 10
         for line in lines:
             data = json.loads(line)
-            assert 'is_correct' in data
+            assert 'symbolic_correct' in data
             assert 'generation' in data
-        assert os.path.exists(
-            f"/tmp/nemo-skills-tests/{model_type}/vllm-generate-seeds/generation/output-rs{seed}.jsonl.done"
-        )
+        assert os.path.exists(f"{output_dir}/output-rs{seed}.jsonl.done")
 
     # running compute_metrics to check that results are expected
-    metrics = ComputeMetrics(benchmark='gsm8k').compute_metrics(
-        [f"/tmp/nemo-skills-tests/{model_type}/vllm-generate-seeds/generation/output-rs*.jsonl"],
-    )["all"]["majority@3"]
+    metrics = ComputeMetrics(benchmark='gsm8k').compute_metrics([f"{output_dir}/output-rs*.jsonl"])["_all_"][
+        "majority@3"
+    ]
     # rough check, since exact accuracy varies depending on gpu type
     assert metrics['symbolic_correct'] >= 50
     assert metrics['num_entries'] == 10

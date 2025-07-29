@@ -12,7 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import importlib
 import json
 import logging
 import random
@@ -27,13 +26,19 @@ import hydra
 from omegaconf import ListConfig, OmegaConf, open_dict
 from tqdm import tqdm
 
-from nemo_skills.code_execution.sandbox import sandbox_params
-from nemo_codegen.code_execution.sandbox import get_sandbox
-from nemo_skills.inference.server.code_execution_model import get_code_execution_model, get_model, server_params
+from nemo_skills.code_execution.sandbox import get_sandbox, sandbox_params
+from nemo_skills.inference.model import get_code_execution_model, get_model, server_params
 from nemo_skills.prompt.utils import get_prompt
-from nemo_skills.utils import chunk_data, get_help_message, nested_dataclass, setup_logging
+from nemo_skills.utils import (
+    chunk_data,
+    get_help_message,
+    get_logger_name,
+    nested_dataclass,
+    remove_thinking,
+    setup_logging,
+)
 
-LOG = logging.getLogger(__file__)
+LOG = logging.getLogger(get_logger_name(__file__))
 
 
 @nested_dataclass(kw_only=True)
@@ -47,39 +52,48 @@ class InferenceConfig:
     repetition_penalty: float = 1.0
     top_logprobs: int | None = None
 
+    extra_body: dict = field(default_factory=dict)  # Any other extra params passed with extra_body argument
+
 
 @nested_dataclass(kw_only=True)
 class GenerateSolutionsConfig:
     """LLM generation parameters."""
 
+    input_file: str  # Path to the input file with data
     output_file: str  # Where to save the generations
+    prompt_config: str | None = None  # How to format the data into prompts
+    prompt_template: str | None = None  # not required for OpenAI server
+    # to specify the format of the prompt, "ns" for NeMo-Skills format or "openai" for OpenAI chat format
+    prompt_format: str = "ns"
+    prompt_suffix: str = ""  # suffix to add to the prompt, e.g. " /no_think"
+    system_message: str | None = None  # can override the default system message in the config
+    code_tags: str | None = None  # required when using code execution
+    examples_type: str | None = None  # to be able to customize few-shot examples
+
     # Inference server configuration {server_params}
     server: dict = field(default_factory=dict)
     # Sandbox configuration {sandbox_params}
     sandbox: dict = field(default_factory=dict)
     # Prompt configuration - path to yaml files
-    prompt_template: str | None = None  # not required for OpenAI server
-    prompt_config: str | None = None  # we will fetch it from dataset dir if not provided
     prefix_generation_to_response: bool = False  # whether to include "generation" as prefix to the response
     # if True, model will be prompted to continue "generation" without closing assistant tag
     continue_prefix_generation: bool = False
 
-    examples_type: str | None = None  # to be able to customize few-shot examples
     inference: InferenceConfig = field(default_factory=InferenceConfig)  # LLM call parameters
 
-    # Can specify one of the existing datasets.
-    dataset: str | None = None
-    split: str | None = None  # Generally one of train/test, but can be anything since it's used as part of a file name
-    input_file: str | None = None  # Can directly specify an input file, if using a custom dataset
-
-    batch_size: int = 128
     max_samples: int = -1  # If > 0, will stop after generating this many samples. Useful for debugging
     skip_filled: bool = False  # If True, will skip the generations that are already in the output file
 
-    max_concurrent_requests: int = 1024  # Maximum number of concurrent requests to the server for the async loop
+    # maximum number of concurrent requests to the server for the async loop
+    # if sync loop is used, this is the batch size
+    max_concurrent_requests: int = 512
     # chunk the dataset into equal sized parts and index into them
     num_chunks: int | None = None  # if specified, will split the data into chunks and only generate for one chunk
     chunk_id: int | None = None  # if specified, will index the specified chunk only
+
+    # if False, will not add num_generated_tokens and generation_time values.
+    # Useful when running judge jobs to keep the original generation statistics
+    add_generation_stats: bool = True
 
     generation_key: str = "generation"
     # if specified, we will have a loop over that key in the data file and
@@ -103,37 +117,37 @@ class GenerateSolutionsConfig:
 
     # set to True if code execution needs to be supported
     code_execution: bool = False
-    # will add to prompt.fill as total_code_executions field (useful for models that support dynamically setting this)
+    # Controls how many code executions are allowed in prompt (useful for models that support dynamically setting this)
     # if total_code_executions placeholder is not in the prompt, this parameter has no effect
-    # if set to tuple, will be randomly sampled from random.randint(min_val, max_val) for each sample in a batch
+    # Can be int, (min,max) tuple, or None
+    # If (min,max) tuple, will be randomly sampled from random.randint(min_val, max_val) for each sample in a batch
     # useful to generate data with variable number of total_code_executions_in_prompt
-    total_code_executions_in_prompt: Any = tuple([1, 8])
+    total_code_executions_in_prompt: Any = None
+    # When True, total_code_executions_in_prompt override model defaults
+    override_max_code_executions: bool = False
 
     # extra stop phrases for llms
     extra_stop_phrases: list[str] = field(default_factory=list)
 
+    # if True, will move full generation to _full_generation key and keep cfg.generation_key without thinking tokens
+    remove_thinking: bool = False
+    thinking_begin: str = "<think>"
+    thinking_end: str = "</think>"
+
     def __post_init__(self):
         self._post_init_validate_data()
         self._post_init_validate_server()
+        self._post_init_validate_params()
 
     def _post_init_validate_data(self):
-        if self.input_file is not None:
-            if self.dataset is not None or self.split is not None:
-                raise ValueError("Either `input_file` or `dataset` and `split` should be provided, but not both")
-        else:
-            if self.dataset is None or self.split is None:
-                raise ValueError("Either `input_file` or `dataset` and `split` should be provided")
-            self.input_file = Path(__file__).parents[1] / "dataset" / self.dataset / f"{self.split}.jsonl"
-
-        if self.dataset is None and self.prompt_config is None:
-            raise ValueError("If `dataset` is not provided, `prompt_config` is required")
-
         if isinstance(self.total_code_executions_in_prompt, ListConfig):
-            self.total_code_executions_in_prompt = tuple(self.total_code_executions_in_prompt)
+            self.total_code_executions_in_prompt = list(self.total_code_executions_in_prompt)
 
-        if not isinstance(self.total_code_executions_in_prompt, (int, list, tuple)):
+        if self.total_code_executions_in_prompt is not None and not isinstance(
+            self.total_code_executions_in_prompt, (int, list, tuple)
+        ):
             raise ValueError(
-                "`total_code_executions_in_prompt` must be either int, list or tuple, "
+                "`total_code_executions_in_prompt` must be either int, list, tuple, or None, "
                 f"got {type(self.total_code_executions_in_prompt)}"
             )
 
@@ -142,14 +156,34 @@ class GenerateSolutionsConfig:
             # TODO: fix that
             raise ValueError("Prompt template is required for trtllm servers")
 
-        if self.server["server_type"] == "nemo" and self.prompt_template is None:
+        if self.server["server_type"] in ["nemo", "megatron"] and self.prompt_template is None:
             LOG.warning(
-                "NeMo implementation of openai chat completions api doesn't support batching and thus is very slow. "
+                "NeMo/Megatron implementation of openai chat completions api "
+                "doesn't support batching and thus is very slow. "
                 "Until this is fixed, we highly recommend that you provide prompt template explicitly."
             )
 
-        if self.server["server_type"] == "openai" and self.prompt_template is not None:
+        if self.server["server_type"] in ["openai", "azureopenai"] and self.prompt_template is not None:
             raise ValueError("Prompt template is not supported for OpenAI server")
+
+    def _post_init_validate_params(self):
+        """Validate that certain parameters are restricted to certain values"""
+        if self.prompt_format not in ["ns", "openai"]:
+            raise ValueError(f"prompt_format must be either 'ns' or 'openai', got '{self.prompt_format}'")
+
+        if self.prompt_format == "openai":
+            assert self.prompt_config is None, "prompt_config is not supported for prompt_format == 'openai'"
+            assert self.prompt_template is None, "prompt_template is not supported for prompt_format == 'openai'"
+            assert self.system_message is None, "system_message is not supported for prompt_format == 'openai'"
+        else:
+            assert self.prompt_config is not None, "prompt_config is required when prompt_format == 'ns'"
+        for param, default_value in self._get_disallowed_params():
+            if getattr(self, param) != default_value:
+                raise ValueError(f"{param} must be {default_value}")
+
+    def _get_disallowed_params(self):
+        """Returns a list of parameters with their default values to check that they are not changed from the defaults"""
+        return []
 
 
 cs = hydra.core.config_store.ConfigStore.instance()
@@ -172,17 +206,6 @@ def combine_stop_phrases(prompt_phrases, extra_phrases):
 
 class GenerationTask:
     @classmethod
-    def get_generation_module(cls) -> str:
-        """
-        Returns the path to the script module that performs the generation task.
-        Override this method to customize the generation module.
-
-        Returns:
-            str: Path to the generation module.
-        """
-        return "nemo_skills.inference.generate"
-
-    @classmethod
     def get_generation_default_args(cls) -> str:
         """
         Returns the default arguments for the generation task.
@@ -192,6 +215,19 @@ class GenerationTask:
             Dict: Default arguments for the generation task.
         """
         return ""
+
+    @classmethod
+    def get_server_command_fn(cls) -> callable:
+        """
+        Returns the function to get the server command for the generation task.
+        Override this method to customize the server command function.
+
+        Returns:
+            callable: Function that returns the server command.
+        """
+        from nemo_skills.pipeline.utils import get_server_command
+
+        return get_server_command
 
     def __init__(self, cfg: GenerateSolutionsConfig):
         """
@@ -210,26 +246,27 @@ class GenerationTask:
             self.extra_generate_params = self.prompt.get_code_execution_args()
         else:
             self.extra_generate_params = {}
+
         self.extra_stop_phrases = OmegaConf.to_container(self.cfg.extra_stop_phrases, resolve=True)
 
         self.use_async_loop = (
-            self.cfg.use_async_loop and self.cfg.server["server_type"] != "nemo" and self.cfg.multi_turn_key is None
+            self.cfg.use_async_loop
+            and self.cfg.server["server_type"] not in ["nemo", "megatron"]
+            and self.cfg.multi_turn_key is None
         )
         if self.use_async_loop:
-            LOG.warning(
-                "Async loop is maintaining %d concurrent "
-                "requests throughout execution -- batch_size parameter is ignored!\n"
+            LOG.info(
+                "Async loop is maintaining %d generations in parallel. "
                 "Use max_concurrent_requests to control the number of concurrent requests.",
                 self.cfg.max_concurrent_requests,
             )
 
     def setup_llm(self):
-        if self.cfg.prompt_template is None and self.cfg.server["server_type"] != "openai":
+        # TODO: DRY with the check in the validation config
+        if self.cfg.prompt_template is None and self.cfg.server["server_type"] in ["nemo", "megatron"]:
             with open_dict(self.cfg.server):
                 self.cfg.server["server_type"] = "openai"
                 self.cfg.server["model"] = "model"
-            if self.cfg.code_execution:
-                raise ValueError("Code execution is not supported for OpenAI server")
 
         if self.cfg.code_execution:
             sandbox = get_sandbox(**self.cfg.sandbox) if self.cfg.sandbox is not None else None
@@ -240,16 +277,25 @@ class GenerationTask:
         return llm
 
     def setup_prompt(self):
-        if self.cfg.prompt_config is None:
-            dataset_module = importlib.import_module(f"nemo_skills.dataset.{self.cfg.dataset}")
-            self.cfg.prompt_config = dataset_module.PROMPT_CONFIG
+        if self.cfg.prompt_format == "openai":
+            return None
 
-        prompt = get_prompt(self.cfg.prompt_config, self.cfg.prompt_template, examples_type=self.cfg.examples_type)
+        prompt = get_prompt(
+            self.cfg.prompt_config, self.cfg.prompt_template, self.cfg.code_tags, examples_type=self.cfg.examples_type
+        )
+        if self.cfg.system_message is not None:
+            prompt.config.system = self.cfg.system_message
         LOG.info("Prompt used: %s", prompt)
         return prompt
 
     def log_example_prompt(self, data):
         data_point = deepcopy(data[0])
+
+        if self.cfg.prompt_format == "openai":
+            # print the prompt in openai format
+            LOG.info("Example prompt in OpenAI format: \nData dictionary: %s", data_point)
+            return
+
         if self.cfg.multi_turn_key is None:
             LOG.info(
                 "Example prompt:\nData dictionary: %s\nPrompt: %s", data_point, self.fill_prompt(data_point, data)
@@ -340,6 +386,9 @@ class GenerationTask:
         for idx, dp in enumerate(data):
             if idx in filled_positions:
                 continue
+            if self.cfg.prompt_format == "openai" and isinstance(dp, list):
+                # openai format allows for a list to be top-level key, if that's the case, wrapping it in a messages key
+                dp = {"messages": dp}
             dp[self.cfg.async_position_key] = idx
             remaining_data.append(dp)
 
@@ -348,28 +397,51 @@ class GenerationTask:
     # TODO: data will not include any samples skipped after restart
     def fill_prompt(self, data_point, data):
         """Passing in full data in case it's needed to fill the prompt in subclasses."""
-        data_point = deepcopy(data_point)
+        if self.cfg.prompt_format == "openai":
+            if self.cfg.prompt_suffix:
+                data_point["messages"][-1]["content"] += self.cfg.prompt_suffix
+            return data_point["messages"]
+
         total_code_executions_in_prompt = self.cfg.total_code_executions_in_prompt
-        if isinstance(total_code_executions_in_prompt, (list, tuple)):
-            min_val, max_val = total_code_executions_in_prompt
-            total_code_executions_in_prompt = random.randint(min_val, max_val)
-        data_point['total_code_executions'] = total_code_executions_in_prompt
-        return self.prompt.fill(
+        if total_code_executions_in_prompt is not None:
+            if isinstance(total_code_executions_in_prompt, (list, tuple)):
+                min_val, max_val = total_code_executions_in_prompt
+                total_code_executions_in_prompt = random.randint(min_val, max_val)
+            data_point['total_code_executions'] = total_code_executions_in_prompt
+        data_point = deepcopy(data_point)
+        filled_prompt = self.prompt.fill(
             data_point,
             multi_turn_key=self.cfg.multi_turn_key,
             prefix_generation_to_response=self.cfg.prefix_generation_to_response,
             continue_prefix_generation=self.cfg.continue_prefix_generation,
         )
+        if self.cfg.prompt_suffix:
+            if isinstance(filled_prompt, list):
+                filled_prompt[-1]['content'] += self.cfg.prompt_suffix
+            else:
+                filled_prompt += self.cfg.prompt_suffix
+        return filled_prompt
 
     def llm_generate(self, data_points, data, is_async=False):
-        generate_method = self.llm.generate_async if is_async else self.llm.generate
-        return generate_method(
-            prompts=[self.fill_prompt(dp, data) for dp in data_points],
-            stop_phrases=combine_stop_phrases(self.prompt.stop_phrases, self.extra_stop_phrases),
+        generation_params = {
+            "prompts": [self.fill_prompt(dp, data) for dp in data_points],
+            "stop_phrases": combine_stop_phrases(
+                self.prompt.stop_phrases if self.prompt is not None else None, self.extra_stop_phrases
+            ),
             **asdict(self.cfg.inference),
             **self.extra_generate_params,
-        )
+        }
 
+        if self.cfg.code_execution:
+            if self.cfg.override_max_code_executions and self.cfg.total_code_executions_in_prompt is not None:
+                max_code_executions_values = [dp['total_code_executions'] for dp in data_points]
+                generation_params['max_code_executions'] = max_code_executions_values
+
+        generate_method = self.llm.generate_async if is_async else self.llm.generate
+
+        return generate_method(**generation_params)
+
+    # TODO: rewrite mtbench to have turns separated in data file and remove this method
     def llm_generate_multi_turn(self, data_points, data):
         # TODO: this will not be efficient if different elements have different number of turns
         # (effective batch size gets smaller). Need to rewrite it to ensure batch size is filled
@@ -408,17 +480,54 @@ class GenerationTask:
             # to make it easier to follow up with evaluation and limit accidental errors, we are adding
             # all of the ground-truth data to the output file alongside the generated solutions
             output[self.cfg.generation_key] = output.pop("generation")
+
+            # calculating total generation time
+            if self.cfg.add_generation_stats:
+                output['generation_end_time'] = time.time()
+                # TODO: start time is saved in data_point, not output, need to fix that
+                output['generation_time'] = (
+                    output['generation_end_time'] - original_data_point['generation_start_time']
+                )
+            else:
+                # generation_start_time was overriden, so restoring it from end and total
+                # TODO: this is a bit hacky, need a rewrite
+                if 'generation_end_time' in original_data_point and 'generation_time' in original_data_point:
+                    output['generation_start_time'] = (
+                        original_data_point['generation_end_time'] - original_data_point['generation_time']
+                    )
+                else:
+                    output.pop('generation_start_time', None)
+                output.pop('num_generated_tokens', None)
+
             for key in output:
                 original_data_point.pop(key, None)
             output.update(original_data_point)
+            if self.cfg.remove_thinking:
+                remove_thinking(output, self.cfg.generation_key, self.cfg.thinking_begin, self.cfg.thinking_end)
             fout.write(json.dumps(output) + "\n")
+
+    def prefill_generation(self, data_point) -> dict | None:
+        """Prefill generation in case LLM is not required."""
+        # Override this method to customize the prefilling behavior.
+        return None
 
     def sync_loop(self, data):
         with open(self.cfg.output_file, "at", encoding="utf-8", buffering=1) as fout:
             data_points_batch = []
             for idx, data_point in tqdm(enumerate(data), total=len(data), desc="Remaining generations"):
-                data_points_batch.append(data_point)
-                if len(data_points_batch) == self.cfg.batch_size or idx == len(data) - 1:
+                prefill_output = self.prefill_generation(data_point)
+                if prefill_output is not None:
+                    # We can bypass the LLM and directly dump the prefilled output
+                    self.dump_outputs([prefill_output], [data_point], fout)
+                else:
+                    data_points_batch.append(data_point)
+
+                if len(data_points_batch) == self.cfg.max_concurrent_requests or idx == len(data) - 1:
+
+                    for data_point in data_points_batch:
+                        # registering current time to calculate total generation time
+                        data_point['generation_start_time'] = time.time()
+
                     if self.cfg.multi_turn_key is None:
                         outputs = self.llm_generate(data_points_batch, data)
                     else:
@@ -426,35 +535,69 @@ class GenerationTask:
                     self.dump_outputs(outputs, data_points_batch, fout)
                     data_points_batch = []
 
-    def async_loop(self, data):
-        pbar = tqdm(total=len(data), desc="Remaining generations")
+    def get_llm_generations(self, requests_in_progress, generations):
+        """Get the completed LLM generations that were submitted asynchronously."""
 
+        gen_ids = list(requests_in_progress.values())
+        outputs = self.llm.get_generations(gen_ids)
+
+        for dp_idx, output in zip(requests_in_progress.keys(), outputs):
+            generations[dp_idx] = output
+
+        return requests_in_progress, generations
+
+    def async_loop(self, data):
+        """Async loop to generate generations."""
+
+        # We first segregate the data into prefilled and non-prefilled data points
+        prefilled_data_points, prefilled_outputs = [], []
+        remaining_data_points = []
+
+        for idx, data_point in enumerate(data):
+            prefill_output = self.prefill_generation(data_point)
+            if prefill_output is not None:
+                prefilled_outputs.append(prefill_output)
+                prefilled_data_points.append(data_point)
+            else:
+                remaining_data_points.append(data_point)
+
+        pbar = tqdm(total=len(remaining_data_points), desc="Remaining generations")
         last_submitted_idx = 0
-        requests_in_progress = {}  # generation_id -> original data_point
+        requests_in_progress = {}  # original data_point_idx -> generation_id
+        generations = []  # original data_point_idx -> generation_dict
         with open(self.cfg.output_file + "-async", "at", encoding="utf-8", buffering=1) as fout:
-            while last_submitted_idx < len(data) or len(requests_in_progress) > 0:
+            # Dump prefilled data first
+            if len(prefilled_data_points) > 0:
+                self.dump_outputs(prefilled_outputs, prefilled_data_points, fout)
+
+            while last_submitted_idx < len(remaining_data_points) or len(requests_in_progress) > 0:
                 num_to_submit = self.cfg.max_concurrent_requests - len(requests_in_progress)
-                if last_submitted_idx < len(data) and num_to_submit > 0:
-                    generation_ids = self.llm_generate(
-                        data[last_submitted_idx : last_submitted_idx + num_to_submit], data, is_async=True
-                    )
+                if last_submitted_idx < len(remaining_data_points) and num_to_submit > 0:
+                    current_data_batch = remaining_data_points[last_submitted_idx : last_submitted_idx + num_to_submit]
+                    for data_point in current_data_batch:
+                        # registering current time to calculate total generation time
+                        data_point['generation_start_time'] = time.time()
+
+                    generation_ids = self.llm_generate(current_data_batch, data, is_async=True)
+
                     for idx, gen_id in enumerate(generation_ids):
-                        requests_in_progress[gen_id] = data[last_submitted_idx + idx]
+                        requests_in_progress[last_submitted_idx + idx] = gen_id
+                        generations.append({"generation": None})
 
                     last_submitted_idx += num_to_submit
 
-                generations = self.llm.get_generations(list(requests_in_progress.keys()))
+                requests_in_progress, generations = self.get_llm_generations(requests_in_progress, generations)
 
                 outputs_to_dump = []
                 data_points_to_dump = []
-                for (gen_id, original_dp), gen_dict in zip(requests_in_progress.copy().items(), generations):
-                    if gen_dict['generation'] is None:  # not done yet
+                for original_dp_idx in requests_in_progress.copy().keys():
+                    if generations[original_dp_idx]['generation'] is None:  # not done yet
                         continue
                     # remove the completed task from in_progress
-                    requests_in_progress.pop(gen_id)
-
-                    outputs_to_dump.append(gen_dict)
-                    data_points_to_dump.append(original_dp)
+                    requests_in_progress.pop(original_dp_idx)
+                    output_dict = generations[original_dp_idx]
+                    outputs_to_dump.append(output_dict)
+                    data_points_to_dump.append(remaining_data_points[original_dp_idx])
 
                     pbar.update(1)
 
@@ -514,6 +657,9 @@ class GenerationTask:
             self.sync_loop(data)
 
         self.postprocess()
+
+
+GENERATION_TASK_CLASS = GenerationTask
 
 
 # Update the hydra main to use the class method

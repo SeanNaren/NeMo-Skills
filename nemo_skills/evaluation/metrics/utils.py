@@ -13,8 +13,11 @@
 
 import json
 import logging
+from typing import Union
 
-LOG = logging.getLogger(__file__)
+from nemo_skills.utils import get_logger_name
+
+LOG = logging.getLogger(get_logger_name(__file__))
 
 
 def read_predictions(predictions, line_idx, file_handles):
@@ -30,8 +33,15 @@ def read_predictions(predictions, line_idx, file_handles):
     return data
 
 
-def is_correct_judgement(judgement):
-    if 'Judgement:' not in judgement:
+def is_correct_judgement(judgement, return_none=False) -> Union[bool, None]:
+    if 'Judgement:' in judgement:
+        verdict = judgement.split('Judgement:')[-1].strip()
+        if verdict.lower().startswith('yes'):
+            return True
+        elif verdict.lower().startswith('no'):
+            return False
+    
+    if return_none:
+        return None
+    else:
         return False  # improper judgement format, so have to judge as false
-    verdict = judgement.split('Judgement:')[-1].strip()
-    return verdict.lower() == 'yes'

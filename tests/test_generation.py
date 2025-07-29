@@ -13,39 +13,37 @@
 # limitations under the License.
 
 import importlib
+import json
 import os
 
 # running most things through subprocess since that's how it's usually used
 import subprocess
-import sys
 from pathlib import Path
 
 import pytest
-from test_datasets import DATASETS
 
-sys.path.append(str(Path(__file__).absolute().parents[1]))
 from nemo_skills.evaluation.metrics import ComputeMetrics
 
 DATA_TO_TEST = []
 template_folder = Path(__file__).parents[1] / 'nemo_skills' / 'prompt' / 'template'
 prompt_templates = [f[:-5] for f in os.listdir(template_folder) if f.endswith('.yaml')]
 
-for dataset, splits in DATASETS:
-    for split in splits:
-        DATA_TO_TEST.append((dataset, split))
+for dataset, split in [('gsm8k', 'train'), ('gsm8k', 'test'), ('math-500', 'test')]:
+    DATA_TO_TEST.append((dataset, split))
 
 
 @pytest.mark.parametrize("dataset,split", DATA_TO_TEST)
 def test_generation_dryrun_llama(dataset, split):
     """Testing the default prompts for each dataset."""
     prompt_template = "llama3-instruct"
-    extra_args = importlib.import_module(f'nemo_skills.dataset.{dataset}').DEFAULT_GENERATION_ARGS
+    extra_args = importlib.import_module(f'nemo_skills.dataset.{dataset}').GENERATION_ARGS
+    prompt_config = importlib.import_module(f'nemo_skills.dataset.{dataset}').PROMPT_CONFIG
     cmd = (
         "python nemo_skills/inference/generate.py "
         f"    ++output_file=./test.jsonl "
         f"    ++prompt_template={prompt_template} "
-        f"    ++dataset={dataset} "
-        f"    ++split={split} "
+        f"    ++prompt_config={prompt_config} "
+        f"    ++input_file=./nemo_skills/dataset/{dataset}/{split}.jsonl "
         f"    ++server.server_type=nemo "
         f"    ++dry_run=True "
         f"    {extra_args} "
@@ -62,48 +60,65 @@ def test_generation_dryrun_gsm8k(prompt_template):
         "python nemo_skills/inference/generate.py "
         f"    ++output_file=./test.jsonl "
         f"    ++prompt_template={prompt_template} "
-        f"    ++dataset={dataset} "
-        f"    ++split={split} "
+        f"    ++prompt_config=generic/math "
+        f"    ++input_file=./nemo_skills/dataset/{dataset}/{split}.jsonl "
         f"    ++server.server_type=nemo "
         f"    ++dry_run=True "
     )
     subprocess.run(cmd, shell=True, check=True)
 
 
-def test_eval_mtbench_api():
-    if not os.getenv('OPENAI_API_KEY'):
-        pytest.skip("Define OPENAI_API_KEY to run this test")
+def test_eval_mtbench_api(tmp_path):
+    if not os.getenv('NVIDIA_API_KEY'):
+        pytest.skip("Define NVIDIA_API_KEY to run this test")
 
     cmd = (
         f"ns eval "
-        f"    --server_type=openai "
-        f"    --model=gpt-4o-mini "
-        f"    --server_address=https://api.openai.com/v1 "
-        f"    --benchmarks=mt-bench:0 "
-        f"    --output_dir=/tmp/nemo-skills-tests/mtbench-api "
-        f"    --extra_eval_args=\"++eval_config.use_batch_api=False\""
+        f"    --server_type=azureopenai "
+        f"    --model=gpt-4.1-20250414 "
+        f"    --server_address=https://llm-proxy.perflab.nvidia.com "
+        f"    --benchmarks=gsm8k "
+        f"    --output_dir={tmp_path} "
         f"    ++max_samples=2 "
     )
     subprocess.run(cmd, shell=True, check=True)
 
     # checking that summarize results works (just that there are no errors, but can inspect the output as well)
     subprocess.run(
-        f"ns summarize_results /tmp/nemo-skills-tests/mtbench-api",
+        f"ns summarize_results {tmp_path}",
         shell=True,
         check=True,
     )
 
     # running compute_metrics to check that results are expected
-    metrics = ComputeMetrics(benchmark='mt-bench').compute_metrics(
-        [f"/tmp/nemo-skills-tests/mtbench-api/eval-results/mt-bench/output.jsonl"],
-    )["all"]["greedy"]
+    metrics = ComputeMetrics(benchmark='gsm8k').compute_metrics(
+        [f"{tmp_path}/eval-results/gsm8k/output.jsonl"],
+    )[
+        "_all_"
+    ]["pass@1"]
 
-    # not having other categories since we just ran with 2 samples
-    assert metrics['average'] >= 7
-    assert metrics['average_turn1'] >= 7
-    assert metrics['average_turn2'] >= 7
-    assert metrics['writing_turn1'] >= 7
-    assert metrics['writing_turn2'] >= 7
-    assert metrics['missing_rating_turn1'] < 2
-    assert metrics['missing_rating_turn2'] < 2
-    assert metrics['num_entries'] == 2
+    assert metrics['symbolic_correct'] >= 80
+
+
+@pytest.mark.parametrize("format", ["list", "dict"])
+def test_generate_openai_format(tmp_path, format):
+    if not os.getenv('NVIDIA_API_KEY'):
+        pytest.skip("Define NVIDIA_API_KEY to run this test")
+
+    cmd = (
+        f"ns generate "
+        f"    --server_type=azureopenai "
+        f"    --model=gpt-4.1-20250414 "
+        f"    --server_address=https://llm-proxy.perflab.nvidia.com "
+        f"    --input_file=/nemo_run/code/tests/data/openai-input-{format}.test "
+        f"    --output_dir={tmp_path} "
+        f"    ++prompt_format=openai "
+    )
+    subprocess.run(cmd, shell=True, check=True)
+
+    # checking that output exists and has the expected format
+    with open(f"{tmp_path}/output.jsonl") as fin:
+        data = [json.loads(line) for line in fin.readlines()]
+    assert len(data) == 2
+    assert len(data[0]['generation']) > 0
+    assert len(data[1]['generation']) > 0

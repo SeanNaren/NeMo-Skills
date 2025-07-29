@@ -4,7 +4,7 @@ Some dockerfiles are directly included in this folder and for some others the in
 To build one of the existing dockerfiles use a command like this
 
 ```
-docker build -t igitman/nemo-skills-nemo:0.6.0 -f dockerfiles/Dockerfile.nemo .
+docker build -t igitman/nemo-skills-nemo:0.6.1 -f dockerfiles/Dockerfile.nemo .
 ```
 It might take a long time for some of the images.
 
@@ -12,4 +12,4 @@ It might take a long time for some of the images.
 
 Follow instructions in [TensorRT-LLM documentation](https://nvidia.github.io/TensorRT-LLM/installation/build-from-source-linux.html#option-1-build-tensorrt-llm-in-one-step).
 
-Our current container is built from `v0.18.1` code version.
+Our current container is built from `v0.19.0` code version.

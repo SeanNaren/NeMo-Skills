@@ -15,13 +15,11 @@
 import json
 import os
 import subprocess
-import sys
 from pathlib import Path
 
 import pytest
 
-sys.path.append(str(Path(__file__).absolute().parents[1]))
-from test_data_preparation import docker_rm_and_mkdir
+from tests.conftest import docker_rm
 
 
 @pytest.mark.gpu
@@ -33,13 +31,13 @@ def test_trtllm_judge():
     if not model_type:
         pytest.skip("Define NEMO_SKILLS_TEST_MODEL_TYPE to run this test")
     if model_type != 'llama':
-        pytest.skip("Only running this test for qwen models")
-    prompt_template = 'qwen-instruct'
+        pytest.skip("Only running this test for llama models")
+    prompt_template = 'llama3-instruct'
 
-    input_file = "/nemo_run/code/tests/data/output-rs0.test"
-    output_file = "/tmp/nemo-skills-tests/data/judge-output-rs0.jsonl"
+    input_dir = "/nemo_run/code/tests/data"
+    output_dir = f"/tmp/nemo-skills-tests/{model_type}/judge/math"
 
-    docker_rm_and_mkdir(output_file)
+    docker_rm([output_dir])
 
     cmd = (
         f"ns generate "
@@ -49,15 +47,17 @@ def test_trtllm_judge():
         f"    --generation_type=math_judge "
         f"    --server_gpus 1 "
         f"    --server_nodes 1 "
-        f"    ++input_file={input_file} "
-        f"    ++output_file={output_file} "
-        f"    --output_dir={os.path.dirname(output_file)} "
+        f"    --input_dir={input_dir} "
+        f"    --output_dir={output_dir} "
+        f"    --num_random_seeds=1 "
+        f"    --preprocess_cmd='cp {input_dir}/output-rs0.test {input_dir}/output-rs0.jsonl' "
         f"    ++prompt_template={prompt_template} "
-        f"    ++batch_size=8 "
         f"    ++max_samples=10 "
         f"    ++skip_filled=False "
     )
     subprocess.run(cmd, shell=True, check=True)
+
+    output_file = f"{output_dir}/output-rs0.jsonl"
 
     # no evaluation by default - checking just the number of lines and that there is a "judgement" key
     with open(output_file) as fin:
@@ -66,3 +66,11 @@ def test_trtllm_judge():
     for line in lines:
         data = json.loads(line)
         assert 'judgement' in data
+
+    # Adding a summarization step to check that the results are formatted correctly
+    cmd = (
+        f"ns summarize_results "
+        f"    --cluster test-local --config_dir {Path(__file__).absolute().parent} "
+        f"    {os.path.dirname(output_file)} "
+    )
+    subprocess.run(cmd, shell=True, check=True)

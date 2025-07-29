@@ -13,6 +13,8 @@ pytest tests/gpu-tests/test_convert.py -k test_hf_trtllm_conversion -s -x
 export NEMO_SKILLS_TEST_TRTLLM_MODEL=/tmp/nemo-skills-tests/$NEMO_SKILLS_TEST_MODEL_TYPE/conversion/hf-to-trtllm/model
 pytest tests/gpu-tests/test_convert.py -k test_hf_nemo_conversion -s -x
 export NEMO_SKILLS_TEST_NEMO_MODEL=/tmp/nemo-skills-tests/$NEMO_SKILLS_TEST_MODEL_TYPE/conversion/hf-to-nemo/model
+pytest tests/gpu-tests/test_convert.py -k test_hf_megatron_conversion -s -x
+export NEMO_SKILLS_TEST_MEGATRON_MODEL=/tmp/nemo-skills-tests/$NEMO_SKILLS_TEST_MODEL_TYPE/conversion/hf-to-megatron/model
 pytest tests/gpu-tests/test_convert.py -k test_nemo_hf_conversion -s -x
 # using the back-converted model to check that it's reasonable
 export NEMO_SKILLS_TEST_HF_MODEL=/tmp/nemo-skills-tests/$NEMO_SKILLS_TEST_MODEL_TYPE/conversion/nemo-to-hf/model
@@ -22,13 +24,11 @@ pytest tests/gpu-tests/test_logprobs.py -s -x
 pytest tests/gpu-tests/test_eval.py -s -x
 pytest tests/gpu-tests/test_generate.py -s -x
 pytest tests/gpu-tests/test_judge.py -s -x
+pytest tests/gpu-tests/test_run_cmd_llm_infer.py -s -x
+pytest tests/gpu-tests/test_contamination.py -s -x
 
 # for sft we are using the tiny random model to run much faster
-docker run --rm \
-    -e HF_TOKEN=$HF_TOKEN \
-    -v /tmp:/tmp \
-    -v `pwd`:/nemo_run/code \
-    igitman/nemo-skills-nemo:0.6.0 \
+ns run_cmd --cluster test-local --config_dir tests/gpu-tests --container nemo \
     python /nemo_run/code/tests/gpu-tests/make_tiny_llm.py --model_type $NEMO_SKILLS_TEST_MODEL_TYPE
 
 # converting the model through test

@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import os
+import subprocess
 from pathlib import Path
 
 import typer
@@ -20,6 +21,25 @@ import yaml
 
 from nemo_skills import _containers
 from nemo_skills.pipeline.app import app
+
+
+def is_docker_available():
+    try:
+        subprocess.run(["docker", "--version"], check=True, capture_output=True)
+        return True
+    except subprocess.SubprocessError:
+        return False
+
+
+# Helper function to pull Docker containers
+def pull_docker_containers(containers):
+    for container_name, container_image in containers.items():
+        typer.echo(f"Pulling {container_name}: {container_image}...")
+        try:
+            subprocess.run(["docker", "pull", container_image], check=True)
+            typer.echo(f"Successfully pulled {container_image}")
+        except subprocess.SubprocessError as e:
+            typer.echo(f"Failed to pull {container_image}: {e}")
 
 
 @app.command()
@@ -69,14 +89,18 @@ def setup():
             "You don't need to mount nemo-skills or your local git repo, it's always accessible with /nemo_run/code\n"
             "It's usually a good idea to define some mounts for your general workspace (to keep data/output results)\n"
             "as well as for your models (e.g. /trt_models, /hf_models).\n"
+            "If you're setting up a Slurm config, make sure to use the cluster paths here.\n"
             "What mounts would you like to add? (comma separated)",
             default=f"/home/{os.getlogin()}:/workspace" if config_type == 'local' else None,
         )
 
         env_vars = typer.prompt(
             "\nYou can also specify any environment variables that you want to be accessible in containers.\n"
-            "Can either define just the name (we take value from the current environment), or name=value to use a fixed value.\n"
-            "By default we will always pass WANDB_API_KEY, NVIDIA_API_KEY, OPENAI_API_KEY, HF_TOKEN, so you don't need to list those.\n"
+            "Can either define just the name (we take value from the current environment), "
+            "or name=value to use a fixed value.\n"
+            "By default we will always pass "
+            "WANDB_API_KEY, NVIDIA_API_KEY, AZURE_OPENAI_API_KEY, OPENAI_API_KEY, HF_TOKEN, "
+            "so you don't need to list those.\n"
             "What other environment variables would you like to define? (comma separated)",
             default="",
         )
@@ -129,13 +153,13 @@ def setup():
             timeouts = typer.prompt(
                 "\nIf your cluster has a strict time limit for each job, we need to "
                 "know the value to be able to save checkpoints before the job is killed.\n"
-                "Specify as partition1:hh:mm:ss,partition2:hh:mm:ss\n"
+                "Specify as partition1=hh:mm:ss;partition2=hh:mm:ss\n"
                 "Leave empty if you don't have time limits.",
                 default="",
             )
             if timeouts:
                 config["timeouts"] = {
-                    partition.split(":")[0]: partition.split(":")[1] for partition in config["timeouts"].split(",")
+                    partition.split("=")[0]: partition.split("=")[1] for partition in timeouts.split(";")
                 }
 
         # Create the config file
@@ -148,6 +172,24 @@ def setup():
             f"You can find more information on what containers we use in "
             f"https://github.com/NVIDIA/NeMo-Skills/tree/main/dockerfiles"
         )
+
+        if config_type == 'local':
+            pull_containers = typer.confirm(
+                "\nWould you like to pull all the necessary Docker containers now? "
+                "This might take some time but ensures everything is ready to use.\n"
+                "You can skip this step and we will pull the containers automatically when you run the first job.",
+                default=True,
+            )
+
+            if pull_containers:
+                if is_docker_available():
+                    typer.echo("\nPulling Docker containers...")
+                    pull_docker_containers(config['containers'])
+                    typer.echo("All containers have been pulled!")
+                else:
+                    typer.echo(
+                        "\nDocker does not seem to be available on your system. Please ensure Docker is installed."
+                    )
 
         # Ask if the user wants to create another config
         create_another = typer.confirm("\nWould you like to create another cluster config?", default=False)

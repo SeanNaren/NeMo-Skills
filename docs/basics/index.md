@@ -54,7 +54,7 @@ You can either use [OpenAI models](https://platform.openai.com/docs/overview) or
         --model=meta/llama-3.1-8b-instruct \
         --server_address=https://integrate.api.nvidia.com/v1 \
         --output_dir=./generation \
-        ++input_file=./input.jsonl \
+        --input_file=./input.jsonl \
         ++prompt_config=./prompt.yaml
     ```
 
@@ -67,7 +67,7 @@ You can either use [OpenAI models](https://platform.openai.com/docs/overview) or
         --model=gpt-4o-mini \
         --server_address=https://api.openai.com/v1 \
         --output_dir=./generation \
-        ++input_file=./input.jsonl \
+        --input_file=./input.jsonl \
         ++prompt_config=./prompt.yaml
     ```
 
@@ -88,7 +88,7 @@ If you pay attention to the log of above commands, you will notice that it print
 WARNING  Cluster config is not specified. Running locally without containers. Only a subset of features is supported and you're responsible for installing any required dependencies. It's recommended to run `ns setup` to define appropriate configs!
 ```
 
-Indeed, for anything more complicated than calling an API model, you'd need to do a little bit more setup. Since there
+Indeed, for anything more complicated than calling an API model, it's recommended that you do a little bit more setup. Since there
 are many heterogeneous jobs that we support, it's much simpler to run things in prebuilt containers than to try to
 install all packages in your current environment. To tell nemo-skills which containers to use and how to mount your
 local filesystem, we'd need to define a [cluster config](./cluster-configs.md). Here is an example of how a "local" cluster
@@ -98,9 +98,9 @@ config might look like
 executor: local
 
 containers:
-  trtllm: igitman/nemo-skills-trtllm:0.5.0
-  vllm: igitman/nemo-skills-vllm:0.5.3
-  nemo: igitman/nemo-skills-nemo:0.5.3
+  trtllm: igitman/nemo-skills-trtllm:0.6.1
+  vllm: igitman/nemo-skills-vllm:0.6.1
+  nemo: igitman/nemo-skills-nemo:0.6.1
   # ... there are some more containers defined here
 
 env_vars:
@@ -125,11 +125,17 @@ and another mount[^1] for `/hf_models`, e.g.
 
 Also add `HUGGINGFACE_HUB_CACHE=/hf_models` when asked to add environment variables.
 
+!!! note
+
+    While we recommend running everything in containers by defining a cluster config, it's not a requirement.
+    Any of our jobs can be run without specifying the config, but you would need to make sure your environment
+    has all necessary packages installed.
+
 Now that we have our first config created, we can run inference
 with a local model (assuming you have at least one GPU on the machine you're using).
 You would also need to have
 [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html)
-set up on your machine.
+set up on your machine and define [HF_TOKEN environment variable](https://huggingface.co/docs/hub/en/security-tokens).
 
 ```bash
 ns generate \
@@ -138,7 +144,7 @@ ns generate \
     --model=Qwen/Qwen2.5-1.5B-Instruct \
     --server_gpus=1 \
     --output_dir=/workspace/generation-local \
-    ++input_file=/workspace/input.jsonl \
+    --input_file=/workspace/input.jsonl \
     ++prompt_config=/workspace/prompt.yaml
 ```
 
@@ -170,7 +176,7 @@ ns generate \
     --model=/workspace/qwen2.5-1.5b-instruct-trtllm \
     --server_gpus=1 \
     --output_dir=/workspace/generation-local-trtllm \
-    ++input_file=/workspace/input.jsonl \
+    --input_file=/workspace/input.jsonl \
     ++prompt_config=/workspace/prompt.yaml \
     ++prompt_template=qwen-instruct # (3)!
 ```
@@ -209,7 +215,7 @@ ns generate \
     --server_type=vllm \
     --model=Qwen/Qwen2.5-1.5B-Instruct \
     --server_gpus=1 \
-    ++input_file=/nemo_run/code/input.jsonl \
+    --input_file=/nemo_run/code/input.jsonl \
     ++prompt_config=/nemo_run/code/prompt.yaml \
     --output_dir=/workspace/generation # (2)!
 ```
@@ -232,7 +238,7 @@ model for a total of 64 samples)
 First prepare evaluation data
 
 ```bash
-python -m nemo_skills.dataset.prepare aime24 aime25
+ns prepare_data aime24 aime25
 ```
 
 Then run the following Python script
@@ -303,28 +309,25 @@ with the following command
 ns summarize_results --cluster=slurm /workspace/qwq-32b-test/results
 ```
 
-which will output the following (`pass@1[64]` is an average accuracy across all 64 generations)
+which will output the following (`pass@1[avg-of-64]` is an average accuracy across all 64 generations)
 
 ```bash
--------------------------- aime24 --------------------------
-evaluation_mode | num_entries | symbolic_correct | no_answer
-greedy          | 30          | 66.67%           | 23.33%
-majority@64     | 30          | 86.67%           | 0.00%
-pass@64         | 30          | 93.33%           | 0.00%
-pass@1[64]      | 30          | 66.41%           | 0.00%
+----------------------------------------- aime24 ----------------------------------------
+evaluation_mode   | num_entries | avg_tokens | gen_seconds | symbolic_correct | no_answer
+pass@1[avg-of-64] | 30          | 10790      | 3952        | 65.16%           | 32.24%
+majority@64       | 30          | 10790      | 3952        | 86.67%           | 3.33%
+pass@64           | 30          | 10790      | 3952        | 86.67%           | 3.33%
 
 
--------------------------- aime25 --------------------------
-evaluation_mode | num_entries | symbolic_correct | no_answer
-greedy          | 30          | 43.33%           | 50.00%
-majority@64     | 30          | 80.00%           | 0.00%
-pass@64         | 30          | 80.00%           | 0.00%
-pass@1[64]      | 30          | 52.45%           | 0.00%
+----------------------------------------- aime25 ----------------------------------------
+evaluation_mode   | num_entries | avg_tokens | gen_seconds | symbolic_correct | no_answer
+pass@1[avg-of-64] | 30          | 12076      | 4061        | 48.80%           | 45.78%
+majority@64       | 30          | 12076      | 4061        | 70.00%           | 13.33%
+pass@64           | 30          | 12076      | 4061        | 76.67%           | 13.33%
 ```
 
 And that's it! Now you know the basics of how to work with nemo-skills and are ready to build your own
-[pipelines](../pipelines/index.md). You can see some examples from our previous releases such as
-[OpenMathInstruct-2](../openmathinstruct2/index.md).
+[pipelines](../pipelines/index.md). You can find more examples in our [tutorials](../tutorials/index.md) or [papers & releases](../releases/index.md).
 
 Please read the next section to recap all of the important concepts that we touched upon and learn some more details.
 

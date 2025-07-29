@@ -27,6 +27,8 @@ ns start_server \
 
 If the model needs to execute code, add `--with_sandbox`
 
+You could also launch an interactive web chat application by adding `--launch_chat_interface`, for more details see the [Chat Interface documentation](chat_interface.md).
+
 ## Send inference requests
 
 Click on :material-plus-circle: symbols in the snippet below to learn more details.
@@ -35,7 +37,7 @@ Click on :material-plus-circle: symbols in the snippet below to learn more detai
 === "Self-hosted models"
 
     ```python
-    from nemo_skills.inference.server.model import get_model
+    from nemo_skills.inference.model import get_model
     from nemo_skills.prompt.utils import get_prompt
 
     llm = get_model(server_type="vllm")  # localhost by default
@@ -75,7 +77,7 @@ Click on :material-plus-circle: symbols in the snippet below to learn more detai
 === "API models"
 
     ```python
-    from nemo_skills.inference.server.model import get_model
+    from nemo_skills.inference.model import get_model
     from nemo_skills.prompt.utils import get_prompt
 
     llm = get_model( # (1)!
@@ -122,12 +124,12 @@ Click on :material-plus-circle: symbols in the snippet below to learn more detai
 
     ``` python
     from nemo_skills.code_execution.sandbox import get_sandbox
-    from nemo_skills.inference.server.code_execution_model import get_code_execution_model
+    from nemo_skills.inference.model import get_code_execution_model
     from nemo_skills.prompt.utils import get_prompt
 
     sandbox = get_sandbox()  # localhost by default
     llm = get_code_execution_model(server_type="vllm", sandbox=sandbox)
-    prompt = get_prompt('generic/default', 'llama3-instruct') # (1)!
+    prompt = get_prompt('generic/default', 'llama3-instruct', code_tags='llama3') # (1)!
     prompt.config.system = ( # (2)!
         "Environment: ipython\n\n"
         "Use Python to solve this math problem."

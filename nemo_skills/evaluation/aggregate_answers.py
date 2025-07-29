@@ -1,4 +1,4 @@
-# Copyright (c) 2024, NVIDIA CORPORATION.  All rights reserved.
+# Copyright (c) 2025, NVIDIA CORPORATION.  All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -14,22 +14,20 @@
 
 import json
 import logging
-import shutil
 import sys
 from collections import Counter, defaultdict
 from enum import Enum
-from itertools import zip_longest
 from pathlib import Path
 from typing import Any, List, Tuple
 
 import hydra
 from tqdm import tqdm
 
-from nemo_skills.code_execution.math_grader import extract_answer
+from nemo_skills.evaluation.math_grader import extract_answer
 from nemo_skills.evaluation.metrics import read_predictions
-from nemo_skills.utils import get_help_message, nested_dataclass, setup_logging, unroll_files
+from nemo_skills.utils import get_help_message, get_logger_name, nested_dataclass, setup_logging, unroll_files
 
-LOG = logging.getLogger(__file__)
+LOG = logging.getLogger(get_logger_name(__file__))
 
 
 @nested_dataclass(kw_only=True)
@@ -59,8 +57,8 @@ class ProcessTopAnswerConfig:
     # if True, will not change the fill_key if it's already filled with not None
     ignore_if_not_none: bool = False
 
-    # if True, will use string match to fill is_correct key
-    fill_is_correct: bool = True
+    # if True, will use string match to fill symbolic_correct key
+    fill_symbolic_correct: bool = True
 
     # if True, use the highest scoring answer from the RM as the majority answer
     use_highest_rm_score: bool = False
@@ -195,7 +193,7 @@ class TopAnswerProcessor:
         cfg = self.cfg
         new_answers = []
         all_predictions = []
-        for idx, predictions in enumerate(tqdm(zip_longest(*self.input_file_handles))):
+        for idx, predictions in enumerate(tqdm(zip(*self.input_file_handles, strict=True))):
             data = read_predictions(predictions, idx, self.input_file_handles)
 
             # Store the metadata about correctness and judgement for each answer
@@ -206,7 +204,7 @@ class TopAnswerProcessor:
                     elem['predicted_answer'] = extract_answer(elem['generation'])
                 if elem['predicted_answer'] is not None:
                     answer_to_metadata[elem['predicted_answer']] = [
-                        elem.get('is_correct', None),
+                        elem.get('symbolic_correct', None),
                         elem.get('judgement', None),
                     ]
 
@@ -282,12 +280,12 @@ class TopAnswerProcessor:
                 else:
                     predictions[fidx]["majority_votes"], predictions[fidx]["total_votes"] = new_answers[idx][1]
 
-                if cfg.fill_is_correct:
-                    predictions[fidx]["is_correct"] = (
+                if cfg.fill_symbolic_correct:
+                    predictions[fidx]["symbolic_correct"] = (
                         predictions[fidx]["predicted_answer"] == predictions[fidx]["expected_answer"]
                     )
                 else:
-                    predictions[fidx].pop("is_correct", None)
+                    predictions[fidx].pop("symbolic_correct", None)
 
                 handle.write(json.dumps(predictions[fidx]) + "\n")
 
@@ -311,7 +309,7 @@ class TopAnswerProcessor:
 
                 data["predicted_answer"] = new_answers[idx][0]
                 if new_answers[idx][2] is not None:
-                    data["is_correct"] = new_answers[idx][2]
+                    data["symbolic_correct"] = new_answers[idx][2]
                 if new_answers[idx][3] is not None:
                     data["judgement"] = new_answers[idx][3]
                 best_answer_file_handle.write(json.dumps(data) + "\n")

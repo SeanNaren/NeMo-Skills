@@ -25,9 +25,9 @@ from tqdm.contrib.concurrent import process_map
 
 from nemo_skills.evaluation.metrics.utils import is_correct_judgement
 from nemo_skills.prompt.utils import get_prompt
-from nemo_skills.utils import unroll_files
+from nemo_skills.utils import get_logger_name, unroll_files
 
-LOG = logging.getLogger(__file__)
+LOG = logging.getLogger(get_logger_name(__file__))
 
 
 class ReadData(BaseProcessor):
@@ -40,6 +40,7 @@ class ReadData(BaseProcessor):
         skip_first: int = 0,
         add_correct: bool = True,
         add_incorrect: bool = False,
+        add_unlabeled: bool = False,
         use_judgement: bool = False,
         keys_to_keep: list[str] | None = None,
         deduplicate: bool = True,
@@ -53,6 +54,7 @@ class ReadData(BaseProcessor):
         self.skip_first = skip_first
         self.add_correct = add_correct
         self.add_incorrect = add_incorrect
+        self.add_unlabeled = add_unlabeled
         self.use_judgement = use_judgement
         self.keys_to_keep = keys_to_keep
         self.deduplicate = deduplicate
@@ -62,7 +64,7 @@ class ReadData(BaseProcessor):
             self.keys_to_keep.add(self.input_key)
             if self.output_key is not None:
                 self.keys_to_keep.add(self.output_key)
-                self.keys_to_keep.add("is_correct")
+                self.keys_to_keep.add("symbolic_correct")
                 self.keys_to_keep.add("judgement")
 
         if isinstance(self.input_files, str):
@@ -117,16 +119,16 @@ class ReadData(BaseProcessor):
             if not line_dict:
                 continue
 
-            if self.output_key is not None:
+            if self.output_key is not None and not self.add_unlabeled:
                 if not self.use_judgement:
-                    if "is_correct" not in line_dict:
-                        LOG.warning("Found incomplete generations (is_correct field is missing) - skipping")
+                    if "symbolic_correct" not in line_dict:
+                        LOG.warning("Found incomplete generations (symbolic_correct field is missing) - skipping")
                         continue
 
-                    if not self.add_correct and line_dict["is_correct"]:
+                    if not self.add_correct and line_dict["symbolic_correct"]:
                         continue
 
-                    if not self.add_incorrect and not line_dict["is_correct"]:
+                    if not self.add_incorrect and not line_dict["symbolic_correct"]:
                         continue
                 else:
                     if "judgement" not in line_dict:
@@ -308,6 +310,7 @@ class WriteFinalSftManifest(BaseProcessor):
         self,
         prompt_config: str,
         prompt_template: str,
+        code_tags: str,
         chat_format: str | None = None,  # nemotron/llama/None
         input_key: str = "input",
         output_key: str = "output",
@@ -326,14 +329,14 @@ class WriteFinalSftManifest(BaseProcessor):
 
         self.prompt = None
         if prompt_config and prompt_template:
-            self.prompt = get_prompt(prompt_config, prompt_template)
+            self.prompt = get_prompt(prompt_config, prompt_template, code_tags)
         else:
             if prompt_template:
                 LOG.warning(
                     "Prompt template is provided, but prompt config is missing! "
                     "Assuming 'user: {input_key}' and no special formatting for output."
                 )
-                self.prompt = get_prompt({"user": "{" + input_key + "}"}, prompt_template)
+                self.prompt = get_prompt({"user": "{" + input_key + "}"}, prompt_template, code_tags)
             else:
                 LOG.warning("Prompt details are missing! The processed data won't be formatted using any prompt.")
 
@@ -365,7 +368,10 @@ class WriteFinalSftManifest(BaseProcessor):
                     generation = elem.pop(self.output_key)
                     if self.prompt:
                         output_sample["input"] = self.prompt.fill(input_dict=elem)
-                        output_sample["output"] = generation + self.prompt.config.template.assistant_end
+                        output_sample["output"] = generation
+                        # not adding end-of-turn for incomplete generations
+                        if output_sample.get("finish_reason", "stop") == "stop":
+                            output_sample["output"] += self.prompt.config.template.assistant_end
                     else:
                         output_sample["input"] = elem[self.input_key]
                         output_sample["output"] = generation
@@ -410,6 +416,7 @@ class WriteFinalRLManifest(BaseProcessor):
         self,
         prompt_config: str,
         prompt_template: str,
+        code_tags: str,
         task_name: str | None = None,
         input_key: str = "input",
         metadata: dict | None = None,
@@ -428,7 +435,7 @@ class WriteFinalRLManifest(BaseProcessor):
 
         self.prompt = None
         if prompt_config and prompt_template:
-            self.prompt = get_prompt(prompt_config, prompt_template)
+            self.prompt = get_prompt(prompt_config, prompt_template, code_tags)
         else:
             LOG.warning("Prompt details are missing! The processed data won't be formatted using any prompt.")
 

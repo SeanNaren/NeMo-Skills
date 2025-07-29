@@ -14,53 +14,135 @@
 
 import json
 import os
-import sys
 from pathlib import Path
 
-import docker
 import pytest
-import yaml
 
-sys.path.append(str(Path(__file__).absolute().parents[1]))
 from nemo_skills.evaluation.metrics import ComputeMetrics
-from nemo_skills.pipeline.cli import eval, generate, train, wrap_arguments
-
-
-def docker_run(image_name, volume_paths, command):
-    client = docker.from_env()
-
-    try:
-        # Process volume paths
-        volumes = {}
-        for path in volume_paths:
-            src, dst = path.split(':')
-            volumes[os.path.abspath(src)] = {'bind': dst, 'mode': 'rw'}
-
-        # Run the container
-        full_command = f"/bin/bash -c '{command}'"
-        result = client.containers.run(
-            image_name,
-            command=full_command,
-            volumes=volumes,
-            remove=True,
-            detach=False,
-        )
-        logs = result.decode('utf-8')
-        print("Operation completed.")
-        print("Container logs:", logs)
-    except docker.errors.ContainerError as e:
-        print(f"Container exited with non-zero status code: {e.exit_status}")
-        print(f"Container logs: {e.stderr.decode('utf-8')}")
-        raise
-    except Exception as e:
-        print(f"An error occurred: {str(e)}")
-        raise  # Re-raise the exception after printing
-    finally:
-        client.close()
+from nemo_skills.pipeline.cli import eval, generate, grpo_nemo_rl, sft_nemo_rl, train, wrap_arguments
+from tests.conftest import docker_rm
 
 
 @pytest.mark.gpu
-def test_sft():
+def test_sft_nemo_rl():
+    model_path = os.getenv('NEMO_SKILLS_TEST_HF_MODEL')
+    if not model_path:
+        pytest.skip("Define NEMO_SKILLS_TEST_HF_MODEL to run this test")
+    model_type = os.getenv('NEMO_SKILLS_TEST_MODEL_TYPE')
+    if not model_type:
+        pytest.skip("Define NEMO_SKILLS_TEST_MODEL_TYPE to run this test")
+    prompt_template = 'llama3-instruct' if model_type == 'llama' else 'qwen-instruct'
+
+    output_dir = f"/tmp/nemo-skills-tests/{model_type}/test-sft-nemo-rl"
+
+    # need to clean up current cluster configuration as we mount /tmp and it causes problems
+    docker_rm(['/tmp/ray/ray_current_cluster', output_dir])
+
+    sft_nemo_rl(
+        ctx=wrap_arguments(
+            '++sft.max_num_steps=5 '
+            '++policy.dtensor_cfg.tensor_parallel_size=1 '
+            '++checkpointing.save_period=2 '
+            '++policy.train_global_batch_size=2 '
+            '++policy.train_micro_batch_size=1 '
+            '++policy.optimizer.kwargs.lr=1e-6 '
+        ),
+        cluster="test-local",
+        config_dir=Path(__file__).absolute().parent,
+        expname="test-sft-nemo-rl",
+        output_dir=output_dir,
+        hf_model=model_path,
+        num_nodes=1,
+        num_gpus=1,
+        num_training_jobs=1,
+        training_data="/nemo_run/code/tests/data/small-sft-data.test",
+        disable_wandb=True,
+    )
+
+    # checking that the final model can be used for evaluation
+    eval(
+        ctx=wrap_arguments(f"++prompt_template={prompt_template} ++max_samples=10 ++inference.tokens_to_generate=10"),
+        cluster="test-local",
+        config_dir=Path(__file__).absolute().parent,
+        model=f"{output_dir}/final_hf_model",
+        server_type="vllm",
+        output_dir=f"{output_dir}/evaluation",
+        benchmarks="gsm8k",
+        server_gpus=1,
+        server_nodes=1,
+        num_jobs=1,
+    )
+
+    metrics = ComputeMetrics(benchmark='gsm8k').compute_metrics(
+        [f"{output_dir}/evaluation/eval-results/gsm8k/output.jsonl"],
+    )["_all_"]["pass@1"]
+    # only checking the total, since model is tiny
+    assert metrics['num_entries'] == 10
+
+
+@pytest.mark.gpu
+def test_grpo_nemo_rl():
+    model_path = os.getenv('NEMO_SKILLS_TEST_HF_MODEL')
+    if not model_path:
+        pytest.skip("Define NEMO_SKILLS_TEST_HF_MODEL to run this test")
+    model_type = os.getenv('NEMO_SKILLS_TEST_MODEL_TYPE')
+    if not model_type:
+        pytest.skip("Define NEMO_SKILLS_TEST_MODEL_TYPE to run this test")
+    prompt_template = 'llama3-instruct' if model_type == 'llama' else 'qwen-instruct'
+
+    output_dir = f"/tmp/nemo-skills-tests/{model_type}/test-grpo-nemo-rl"
+
+    # need to clean up current cluster configuration as we mount /tmp and it causes problems
+    docker_rm(['/tmp/ray/ray_current_cluster', output_dir])
+
+    grpo_nemo_rl(
+        ctx=wrap_arguments(
+            '++data.prompt.prompt_config=qwen/math-cot '
+            '++data.prompt.prompt_template=qwen-instruct '
+            '++grpo.max_num_steps=5 '
+            '++grpo.num_prompts_per_step=2 '
+            '++policy.max_total_sequence_length=256 '
+            '++policy.dtensor_cfg.tensor_parallel_size=1 '
+            '++checkpointing.save_period=2 '
+            '++policy.train_global_batch_size=2 '
+            '++policy.train_micro_batch_size=1 '
+            '++policy.optimizer.kwargs.lr=1e-6 '
+        ),
+        cluster="test-local",
+        config_dir=Path(__file__).absolute().parent,
+        expname="test-grpo-nemo-rl",
+        output_dir=output_dir,
+        hf_model=model_path,
+        num_nodes=1,
+        num_gpus=1,
+        num_training_jobs=1,
+        training_data="/nemo_run/code/tests/data/small-grpo-data.test",
+        disable_wandb=True,
+    )
+
+    # checking that the final model can be used for evaluation
+    eval(
+        ctx=wrap_arguments(f"++prompt_template={prompt_template} ++max_samples=10 ++inference.tokens_to_generate=10"),
+        cluster="test-local",
+        config_dir=Path(__file__).absolute().parent,
+        model=f"{output_dir}/final_hf_model",
+        server_type="vllm",
+        output_dir=f"{output_dir}/evaluation",
+        benchmarks="gsm8k",
+        server_gpus=1,
+        server_nodes=1,
+        num_jobs=1,
+    )
+
+    metrics = ComputeMetrics(benchmark='gsm8k').compute_metrics(
+        [f"{output_dir}/evaluation/eval-results/gsm8k/output.jsonl"],
+    )["_all_"]["pass@1"]
+    # only checking the total, since model is tiny
+    assert metrics['num_entries'] == 10
+
+
+@pytest.mark.gpu
+def test_sft_aligner():
     model_path = os.getenv('NEMO_SKILLS_TEST_NEMO_MODEL')
     if not model_path:
         pytest.skip("Define NEMO_SKILLS_TEST_NEMO_MODEL to run this test")
@@ -68,6 +150,9 @@ def test_sft():
     if not model_type:
         pytest.skip("Define NEMO_SKILLS_TEST_MODEL_TYPE to run this test")
     prompt_template = 'llama3-instruct' if model_type == 'llama' else 'qwen-instruct'
+
+    output_dir = f"/tmp/nemo-skills-tests/{model_type}/test-sft-aligner"
+    docker_rm([output_dir])
 
     train(
         ctx=wrap_arguments(
@@ -86,7 +171,7 @@ def test_sft():
         cluster="test-local",
         config_dir=Path(__file__).absolute().parent,
         expname="test-sft",
-        output_dir=f"/tmp/nemo-skills-tests/{model_type}/test-sft",
+        output_dir=output_dir,
         nemo_model=model_path,
         num_nodes=1,
         num_gpus=1,
@@ -97,28 +182,27 @@ def test_sft():
 
     # checking that the final model can be used for evaluation
     eval(
-        ctx=wrap_arguments(f"++prompt_template={prompt_template} ++split=test ++batch_size=8 ++max_samples=10"),
+        ctx=wrap_arguments(f"++prompt_template={prompt_template} ++max_samples=10"),
         cluster="test-local",
         config_dir=Path(__file__).absolute().parent,
-        model=f"/tmp/nemo-skills-tests/{model_type}/test-sft/model-averaged-nemo",
+        model=f"{output_dir}/model-averaged-nemo",
         server_type="nemo",
-        output_dir=f"/tmp/nemo-skills-tests/{model_type}/test-sft/evaluation",
-        benchmarks="gsm8k:0",
+        output_dir=f"{output_dir}/evaluation",
+        benchmarks="gsm8k",
         server_gpus=1,
         server_nodes=1,
         num_jobs=1,
-        partition="interactive",
     )
 
     metrics = ComputeMetrics(benchmark='gsm8k').compute_metrics(
-        [f"/tmp/nemo-skills-tests/{model_type}/test-sft/evaluation/eval-results/gsm8k/output.jsonl"],
-    )["all"]["greedy"]
+        [f"{output_dir}/evaluation/eval-results/gsm8k/output.jsonl"],
+    )["_all_"]["pass@1"]
     # only checking the total, since model is tiny
     assert metrics['num_entries'] == 10
 
 
 @pytest.mark.gpu
-def test_dpo():
+def test_dpo_aligner():
     model_path = os.getenv('NEMO_SKILLS_TEST_NEMO_MODEL')
     if not model_path:
         pytest.skip("Define NEMO_SKILLS_TEST_NEMO_MODEL to run this test")
@@ -126,6 +210,9 @@ def test_dpo():
     if not model_type:
         pytest.skip("Define NEMO_SKILLS_TEST_MODEL_TYPE to run this test")
     prompt_template = 'llama3-instruct' if model_type == 'llama' else 'qwen-instruct'
+
+    output_dir = f"/tmp/nemo-skills-tests/{model_type}/test-dpo-aligner"
+    docker_rm([output_dir])
 
     train(
         ctx=wrap_arguments(
@@ -146,7 +233,7 @@ def test_dpo():
         config_dir=Path(__file__).absolute().parent,
         expname="test-dpo",
         training_algo="dpo",
-        output_dir=f"/tmp/nemo-skills-tests/{model_type}/test-dpo",
+        output_dir=output_dir,
         nemo_model=model_path,
         num_nodes=1,
         num_gpus=1,
@@ -157,29 +244,28 @@ def test_dpo():
 
     # checking that the final model can be used for evaluation
     eval(
-        ctx=wrap_arguments(f"++prompt_template={prompt_template} ++split=test ++batch_size=8 ++max_samples=10"),
+        ctx=wrap_arguments(f"++prompt_template={prompt_template} ++max_samples=10"),
         cluster="test-local",
         config_dir=Path(__file__).absolute().parent,
-        model=f"/tmp/nemo-skills-tests/{model_type}/test-dpo/model-averaged-nemo",
+        model=f"{output_dir}/model-averaged-nemo",
         server_type="nemo",
-        output_dir=f"/tmp/nemo-skills-tests/{model_type}/test-dpo/evaluation",
-        benchmarks="gsm8k:0",
+        output_dir=f"{output_dir}/evaluation",
+        benchmarks="gsm8k",
         server_gpus=1,
         server_nodes=1,
         num_jobs=1,
-        partition="interactive",
     )
 
     metrics = ComputeMetrics(benchmark='gsm8k').compute_metrics(
-        [f"/tmp/nemo-skills-tests/{model_type}/test-dpo/evaluation/eval-results/gsm8k/output.jsonl"],
-    )["all"]["greedy"]
+        [f"{output_dir}/evaluation/eval-results/gsm8k/output.jsonl"],
+    )["_all_"]["pass@1"]
     # only checking the total, since model is tiny
     assert metrics['num_entries'] == 10
 
 
 @pytest.mark.gpu
 @pytest.mark.parametrize("test_mode", ["unit", "integration"])
-def test_rm(test_mode):
+def test_rm_aligner(test_mode):
     seeds_supported_models = ['llama']
     model_path = os.getenv('NEMO_SKILLS_TEST_NEMO_MODEL')
     if not model_path:
@@ -204,15 +290,8 @@ def test_rm(test_mode):
         if not expected_scores_per_file:
             pytest.skip("Define NEMO_SKILLS_TEST_RM_EXPECTED_SCORES_PER_FILE to run this test")
 
-    test_config_path = Path(__file__).absolute().parent / "test-local.yaml"
-    config = yaml.safe_load(open(test_config_path).read())
-    volumes = config['mounts']
-    container = config['containers']['nemo-skills']
-    docker_run(
-        image_name=container,
-        volume_paths=volumes,
-        command=f'rm -rf /tmp/nemo-skills-tests/{model_type}/test-rm/{{training,score,model-averaged-nemo}}',
-    )
+    output_dir = f"/tmp/nemo-skills-tests/{model_type}/test-rm-aligner"
+    docker_rm([output_dir])
 
     train(
         ctx=wrap_arguments(
@@ -233,7 +312,7 @@ def test_rm(test_mode):
         config_dir=Path(__file__).absolute().parent,
         expname="test-rm",
         training_algo="rm",
-        output_dir=f"/tmp/nemo-skills-tests/{model_type}/test-rm",
+        output_dir=output_dir,
         nemo_model=model_path,
         num_nodes=1,
         num_gpus=1,
@@ -242,59 +321,46 @@ def test_rm(test_mode):
         disable_wandb=True,
     )
 
-    assert os.path.exists(f"/tmp/nemo-skills-tests/{model_type}/test-rm/model-averaged-nemo")
+    assert os.path.exists(f"{output_dir}/model-averaged-nemo")
 
     generate(
-        ctx=wrap_arguments(
-            f"++batch_size=2 "
-            f"++input_dir={input_dir_greedy} "
-            f"++prompt_config=generic/math-base "
-            f"++prompt_template=llama3-base "
-        ),
+        ctx=wrap_arguments("++prompt_config=generic/math-base ++prompt_template=llama3-base "),
         cluster="test-local",
         config_dir=Path(__file__).absolute().parent,
-        output_dir=f"/tmp/nemo-skills-tests/{model_type}/test-rm/score",
+        input_file=f"{input_dir_greedy}/output.jsonl",
+        output_dir=f"{output_dir}/score",
         server_type="nemo",
         generation_type="reward",
         expname="test-rm",
-        model=f"/tmp/nemo-skills-tests/{model_type}/test-rm/model-averaged-nemo",
+        model=f"{output_dir}/model-averaged-nemo",
         server_gpus=1,
         server_nodes=1,
-        partition="interactive",
         num_random_seeds=None,
     )
 
-    assert os.path.exists(f"/tmp/nemo-skills-tests/{model_type}/test-rm/score/output.jsonl")
-    rm_output = [json.loads(line) for line in open(f"/tmp/nemo-skills-tests/{model_type}/test-rm/score/output.jsonl")]
+    assert os.path.exists(f"{output_dir}/score/output.jsonl")
+    rm_output = [json.loads(line) for line in open(f"{output_dir}/score/output.jsonl")]
     assert len(rm_output) == expected_scores_per_file
     assert all("reward_model_score" in line for line in rm_output)
 
     if model_type in seeds_supported_models:
         generate(
-            ctx=wrap_arguments(
-                f"++batch_size=2 "
-                f"++input_dir={input_dir_seeds} "
-                f"++prompt_config=generic/math-base "
-                f"++prompt_template=llama3-base "
-            ),
+            ctx=wrap_arguments(f"++prompt_config=generic/math-base " f"++prompt_template=llama3-base "),
             cluster="test-local",
             config_dir=Path(__file__).absolute().parent,
-            output_dir=f"/tmp/nemo-skills-tests/{model_type}/test-rm/score",
+            input_dir=input_dir_seeds,
+            output_dir=f"{output_dir}/score",
             server_type="nemo",
             generation_type="reward",
             expname="test-rm",
-            model=f"/tmp/nemo-skills-tests/{model_type}/test-rm/model-averaged-nemo",
+            model=f"{output_dir}/model-averaged-nemo",
             server_gpus=1,
             server_nodes=1,
-            partition="interactive",
             num_random_seeds=3,
         )
 
         for rs in range(3):
-            assert os.path.exists(f"/tmp/nemo-skills-tests/{model_type}/test-rm/score/output-rs{rs}.jsonl")
-            rm_output = [
-                json.loads(line)
-                for line in open(f"/tmp/nemo-skills-tests/{model_type}/test-rm/score/output-rs{rs}.jsonl")
-            ]
+            assert os.path.exists(f"{output_dir}/score/output-rs{rs}.jsonl")
+            rm_output = [json.loads(line) for line in open(f"{output_dir}/score/output-rs{rs}.jsonl")]
             assert len(rm_output) == expected_scores_per_file
             assert all("reward_model_score" in line for line in rm_output)
