@@ -30,6 +30,11 @@ from nemo_skills.utils import get_help_message, get_logger_name, nested_dataclas
 LOG = logging.getLogger(get_logger_name(__file__))
 
 
+tool_call_template = """
+
+"""
+
+
 @nested_dataclass(kw_only=True)
 class LocalAgentGenerationConfig(GenerateSolutionsConfig):
     inference: InferenceConfig = field(default_factory=InferenceConfig)  # LLM call parameters
@@ -122,6 +127,7 @@ class LocAgentGenerationTask(GenerationTask):
         """Will do all necessary generations to get a single answer for the data point."""
         total_steps = self.cfg.total_steps
         previous_llm_code = [None] * total_steps
+        chat_history = [data_point]
         task_solutions = {}
         total_generated_tokens = 0
         instance_filepath = f"{self.cfg.mount_directory}/{data_point['instance_id']}.pickle"
@@ -134,7 +140,7 @@ class LocAgentGenerationTask(GenerationTask):
 
         for cur_step in range(total_steps):
             try:
-                llm_output = await super().process_single_datapoint(data_point, all_data)
+                llm_output = await super().process_single_datapoint(chat_history, all_data)
             # TODO: this is a hack (as not all servers return that),
             # but eventually we should support handling errors like this globally for all generations
             except openai.BadRequestError as e:
@@ -162,8 +168,9 @@ class LocAgentGenerationTask(GenerationTask):
 
             if extracted_block["type"] == "tool_calls":
                 tool_call_result = self.tool_executor.execute_tool(extracted_block, data)
-            
+
             LOG.info(tool_call_result)
+            break
 
         # generation is a dict["problem_id.subtask_step": full_solution] here
         LOG.info("Succesfully executed!")
