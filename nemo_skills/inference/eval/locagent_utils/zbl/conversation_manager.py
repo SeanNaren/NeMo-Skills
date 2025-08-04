@@ -8,7 +8,7 @@ from transformers import AutoTokenizer
 from config import Config
 from core.logger import ConversationTracker
 
-from .dialog_processor import DialogProcessor
+from ..dialog_processor import DialogProcessor
 from .logger import logger
 from .prompt_builder import PromptBuilder
 from .tool_executor import ToolExecutor

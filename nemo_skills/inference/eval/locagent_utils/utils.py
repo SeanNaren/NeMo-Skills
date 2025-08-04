@@ -11,6 +11,26 @@ def get_version():
             return f.read().strip()
     return "0.0.0"
 
+def tree_structure_from_pickle(data: dict, exclude_dirs: set):
+    def build_level(d, prefix=""):
+        lines = []
+        items = list(d.keys())
+        filtered_items = [key for key in items if key not in exclude_dirs]
+        for i, key in enumerate(filtered_items):
+            is_last = i == len(filtered_items) - 1
+            connector = "└── " if is_last else "|-- "
+            lines.append(f"{prefix}{connector}{key}")
+
+            node = d[key]
+            is_folder = isinstance(node, dict) and set(node.keys()) != {'classes', 'functions', 'text'}
+
+            if is_folder:
+                new_prefix = prefix + ("    " if is_last else "|   ")
+                lines.extend(build_level(node, new_prefix))
+        return lines
+
+    all_lines = build_level(data['structure'])
+    return ".\n" + "\n".join(all_lines)
 
 def extract_locations_from_patch(patch: str) -> List[str]:
     """Extract file locations from git patch."""

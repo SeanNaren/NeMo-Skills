@@ -1,176 +1,147 @@
 import os
-from config import Config
-
 import logging
-from .repository_manager import RepositoryManager
+from nemo_skills.utils import get_logger_name
 
 LOG = logging.getLogger(get_logger_name(__file__))
 
 
 class ToolExecutor:
-    """Handles tool execution for the assistant."""
+    """Handles tool execution for the assistant against a nested dictionary representation of a repository."""
 
-    def __init__(self, config: Config = None):
-        self.repo_manager = repo_manager
-        self.config = config
+    def __init__(self, cfg):
+        self.cfg = cfg
 
-    def execute_tool(self, extracted_block: dict, repo_dir: str) -> str:
+    def execute_tool(self, extracted_block: dict, repo_dict: dict) -> str:
         """Execute a tool call and return the result."""
-        LOG.info(f"Executing tool: {extracted_block.get('tool', '')}")
+        tool_name = extracted_block.get("tool", "")
+        LOG.info(f"Executing tool: {tool_name}")
 
-        if extracted_block.get("tool") == "view":
-            return self._execute_view_tool(extracted_block, repo_dir)
-        elif extracted_block.get("tool") == "repo_tree":
-            return self._execute_repo_tree_tool(repo_dir)
-        elif extracted_block.get("tool") == "codebase_search":
-            return self._execute_codebase_search_tool(extracted_block, repo_dir)
+        if tool_name == "view":
+            return self._execute_view_tool(extracted_block, repo_dict)
+        elif tool_name == "repo_tree":
+            return self._execute_repo_tree_tool(repo_dict)
+        elif tool_name == "codebase_search":
+            return self._execute_codebase_search_tool(extracted_block, repo_dict)
         else:
-            LOG.error(f"Unknown tool: {extracted_block.get('tool', '')}")
-            return f"Error: Unknown tool '{extracted_block.get('tool', '')}'"
+            LOG.error(f"Unknown tool: {tool_name}")
+            return f"Error: Unknown tool '{tool_name}'"
 
-    def _execute_view_tool(self, extracted_block: dict, repo_dir: str) -> str:
-        """Execute the view tool to show file contents."""
+    def _get_node_from_path(self, repo_dict: dict, path: str):
+        """Helper function to navigate the nested dict using a file path."""
+        # Normalize path to handle both empty and non-empty paths
+        parts = [part for part in path.split('/') if part]
+        current_level = repo_dict
+        try:
+            for part in parts:
+                current_level = current_level[part]
+            return current_level
+        except (KeyError, TypeError):
+            return None
+
+    def _is_file_node(self, node: dict) -> bool:
+        """Checks if a node in the dictionary represents a file."""
+        return isinstance(node, dict) and "text" in node and isinstance(node["text"], list)
+
+    def _is_dir_node(self, node: dict) -> bool:
+        """Checks if a node in the dictionary represents a directory."""
+        return isinstance(node, dict) and "text" not in node
+
+    def _execute_view_tool(self, extracted_block: dict, repo_dict: dict) -> str:
+        """Execute the view tool to show file contents from the dictionary."""
         try:
             file_path = extracted_block.get("path", "")
+            if not file_path:
+                return "Error: No file path provided for the 'view' tool."
             view_range = extracted_block.get("view_range")
 
             LOG.info(f"Viewing file: {file_path}")
             if view_range:
                 LOG.info(f"Range: lines {view_range[0]}-{view_range[1]}")
 
-            # Resolve file path
-            if os.path.isabs(file_path) or os.path.commonpath([os.path.abspath(file_path), os.path.abspath(repo_dir)]) == os.path.abspath(repo_dir):
-                full_path = file_path
-            else:
-                full_path = os.path.join(repo_dir, file_path)
+            file_node = self._get_node_from_path(repo_dict, file_path)
 
-            with open(full_path, "r", encoding="utf-8") as f:
-                lines = f.readlines()
+            if not self._is_file_node(file_node):
+                LOG.error(f"File not found or is a directory: {file_path}")
+                return f"Error: File not found at path '{file_path}'"
 
-            # Handle view range according to tool instructions:
-            # - omit view_range to show the whole file
-            # - [start, end] → show inclusive lines start-end
-            # - [start, -1] → show from start to EOF
+            lines = file_node["text"]  # The lines are already clean, without trailing '\n'
+
             if view_range is None:
-                # Show whole file
                 start_line, end_line = 1, len(lines)
                 LOG.info(f"Showing entire file ({len(lines)} lines)")
             else:
-                # Validate view_range format
                 if not isinstance(view_range, list) or len(view_range) != 2:
                     LOG.error(f"Invalid view_range format: {view_range}. Expected [start, end] or [start, -1]")
                     return f"Error: Invalid view_range format. Expected [start, end] or [start, -1], got {view_range}"
-
                 start_line, end_line = view_range[0], view_range[1]
-
-                # Handle [start, -1] case (show from start to EOF)
                 if end_line == -1:
                     end_line = len(lines)
                     LOG.info(f"Showing from line {start_line} to end of file ({len(lines)} lines)")
                 else:
                     LOG.info(f"Showing lines {start_line}-{end_line}")
 
-            # Validate line numbers
             if start_line < 1:
-                LOG.info(f"Start line {start_line} is less than 1, adjusting to 1")
                 start_line = 1
-
             if end_line > len(lines):
-                LOG.info(f"End line {end_line} is greater than file length ({len(lines)}), adjusting to {len(lines)}")
                 end_line = len(lines)
-
             if start_line > end_line:
                 LOG.error(f"Start line {start_line} is greater than end line {end_line}")
                 return f"Error: Start line {start_line} is greater than end line {end_line}"
 
-            # Extract and format the requested lines
-            result_lines = [f"{i+1:4d}: {lines[i].rstrip()}" for i in range(start_line - 1, end_line)]
-
+            result_lines = [f"{i+1:4d}: {lines[i]}" for i in range(start_line - 1, end_line)]
             LOG.success(f"Successfully read {len(result_lines)} lines from {file_path}")
-
-            # Create the full file content
             file_content = f"File: {file_path} (lines {start_line}-{end_line})\n" + "\n".join(result_lines)
-
             return file_content
 
         except Exception as e:
             LOG.error(f"Error executing view tool: {str(e)}")
             return f"Error executing view tool: {str(e)}"
 
-    def _execute_repo_tree_tool(self, repo_dir: str) -> str:
-        result = []
-        repo_name = os.path.basename(repo_dir)
-        result.append(f"{repo_name}/")
+    def _execute_repo_tree_tool(self, repo_dict: dict) -> str:
+        """Generates a tree view of the repository from the nested dictionary."""
+        result = ["repository/"]
 
-        # Get all allowed files with their line counts first (only if show_line_counts is enabled)
-        file_line_counts = {}
-        if getattr(self.config, "show_line_counts", True):
-            for root, dirs, files in os.walk(repo_dir):
-                for file in files:
-                    # Check if file has any of the allowed extensions
-                    file_ext = os.path.splitext(file)[1].lstrip(".")
-                    if file_ext in self.config.file_extensions or file in self.config.file_extensions:
-                        full_path = os.path.join(root, file)
-                        try:
-                            with open(full_path, "r", encoding="utf-8", errors="ignore") as f:
-                                line_count = sum(1 for _ in f)
-                            file_line_counts[full_path] = line_count
-                        except Exception:
-                            file_line_counts[full_path] = 0
+        def add_to_tree(current_dict: dict, prefix: str = ""):
+            items = []
+            for name, node in current_dict.items():
+                if self._is_dir_node(node):
+                    items.append((name, True))  # (name, is_dir)
+                elif self._is_file_node(node):
+                    file_ext = os.path.splitext(name)[1].lstrip(".")
+                    if file_ext in self.cfg.allowed_exts or name in self.cfg.allowed_exts:
+                        items.append((name, False))  # (name, is_file)
 
-        def add_to_tree(path, prefix="", rel_path=""):
-            try:
-                # Get all items and sort them (directories first, then files)
-                items = []
-                for item in os.listdir(path):
-                    item_path = os.path.join(path, item)
-                    if os.path.isdir(item_path):
-                        items.append((item, True))  # (name, is_dir)
+            items.sort(key=lambda x: (not x[1], x[0].lower()))  # Dirs first, then alphabetical
+
+            for i, (name, is_dir) in enumerate(items):
+                if name.startswith(".") or name in ["__pycache__", ".git"]:
+                    continue
+                if is_dir and name.lower() in self.cfg.exclude_dirs:
+                    continue
+
+                is_last = i == len(items) - 1
+                connector = '└── ' if is_last else '├── '
+
+                if is_dir:
+                    result.append(f"{prefix}{connector}{name}/")
+                    new_prefix = prefix + ("    " if is_last else "│   ")
+                    add_to_tree(current_dict[name], new_prefix)
+                else:  # is_file
+                    if self.cfg.show_line_counts:
+                        line_count = len(current_dict[name]['text'])
+                        result.append(f"{prefix}{connector}{name} ({line_count} lines)")
                     else:
-                        # Check if file has any of the allowed extensions
-                        file_ext = os.path.splitext(item)[1].lstrip(".")
-                        if file_ext in self.config.file_extensions or item in self.config.file_extensions:
-                            items.append((item, False))  # (name, is_file)
+                        result.append(f"{prefix}{connector}{name}")
 
-                # Sort: directories first, then files, both alphabetically
-                items.sort(key=lambda x: (not x[1], x[0].lower()))
+        try:
+            add_to_tree(repo_dict)
+            return "\n".join(result)
+        except Exception as e:
+            LOG.error(f"Error generating repo tree: {str(e)}")
+            return f"Error generating repo tree: {str(e)}"
 
-                for i, (item, is_dir) in enumerate(items):
-                    # Skip unwanted directories and files
-                    if item.startswith(".") or item in ["__pycache__", ".git"]:
-                        continue
-
-                    # Skip excluded directories
-                    exclude_dirs = getattr(self.config, "exclude_dirs", set())
-                    if is_dir and item.lower() in exclude_dirs:
-                        continue
-
-                    item_path = os.path.join(path, item)
-                    is_last = i == len(items) - 1
-
-                    if is_dir:
-                        # Directory
-                        result.append(f"{prefix}{'└── ' if is_last else '├── '}{item}/")
-                        new_prefix = prefix + ("    " if is_last else "│   ")
-                        new_rel_path = os.path.join(rel_path, item) if rel_path else item
-                        add_to_tree(item_path, new_prefix, new_rel_path)
-                    else:
-                        # Allowed file
-                        full_path = os.path.join(repo_dir, rel_path, item) if rel_path else os.path.join(repo_dir, item)
-                        if getattr(self.config, "show_line_counts", True):
-                            line_count = file_line_counts.get(full_path, 0)
-                            result.append(f"{prefix}{'└── ' if is_last else '├── '}{item} ({line_count} lines)")
-                        else:
-                            result.append(f"{prefix}{'└── ' if is_last else '├── '}{item}")
-
-            except Exception:
-                pass
-
-        add_to_tree(repo_dir)
-        return "\n".join(result)
-
-    def _execute_codebase_search_tool(self, extracted_block: dict, repo_dir: str) -> str:
-        """Execute the codebase_search tool to search for code."""
+    def _execute_codebase_search_tool(self, extracted_block: dict, repo_dict: dict) -> str:
+        """Executes a codebase search on the nested dictionary, showing context around matches."""
         query = extracted_block.get("query", "")
         if not query:
             return "Error: No search query provided for codebase_search tool."
@@ -178,81 +149,90 @@ class ToolExecutor:
         LOG.info(f"Searching codebase for: {query}")
 
         try:
-            import re
-            from pathlib import Path
-
             results = []
             query_lower = query.lower()
 
-            # Define file extensions to search (focus on code files)
-            code_extensions = self.config.code_extensions if self.config and self.config.code_extensions else {'.py'}
+            def search_recursive(current_dict: dict, current_path: str):
+                for name, node in current_dict.items():
+                    new_path = f"{current_path}/{name}" if current_path else name
 
-            # Use exclude_dirs from config (DEFAULT_EXCLUDE_DIRS)
-            exclude_dirs = self.config.exclude_dirs if self.config and self.config.exclude_dirs else set()
+                    if self._is_dir_node(node):
+                        if name.lower() not in self.cfg.exclude_dirs:
+                            search_recursive(node, new_path)
 
-            repo_path = Path(repo_dir)
+                    elif self._is_file_node(node):
+                        if os.path.splitext(name)[1] not in self.cfg.code_extensions:
+                            continue
 
-            for file_path in repo_path.rglob('*'):
-                # Skip directories
-                if file_path.is_dir():
-                    continue
+                        lines = node["text"]
+                        # Find all lines containing the query (using 0-based indexing)
+                        match_indices = [i for i, line in enumerate(lines) if query_lower in line.lower()]
 
-                # Skip excluded directories
-                rel_path = file_path.relative_to(repo_path)
-                if any(exclude_dir in rel_path.parts for exclude_dir in exclude_dirs):
-                    continue
+                        # If no matches were found in this file, skip it
+                        if not match_indices:
+                            continue
 
-                # Skip files without code extensions
-                if file_path.suffix not in code_extensions:
-                    continue
+                        file_result_parts = [f"File: {new_path}"]
+                        total_matches_in_file = len(match_indices)
 
-                try:
-                    with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
-                        content = f.read()
+                        # Use a set to track lines already shown in a snippet to avoid overlaps
+                        # for matches that are close to each other.
+                        shown_indices = set()
 
-                    # Search for query in content
-                    if query_lower in content.lower():
-                        # Get relative path from repo root
-                        rel_path = file_path.relative_to(repo_path)
+                        MAX_SNIPPETS_PER_FILE = 3  # Limit the number of context blocks per file
+                        snippets_created = 0
 
-                        # Find matching lines
-                        lines = content.split('\n')
-                        matching_lines = []
+                        for match_idx in match_indices:
+                            if snippets_created >= MAX_SNIPPETS_PER_FILE:
+                                break
 
-                        for i, line in enumerate(lines, 1):
-                            if query_lower in line.lower():
-                                # Truncate long lines for readability
-                                line_preview = line.strip()[:100]
-                                if len(line.strip()) > 100:
-                                    line_preview += "..."
-                                matching_lines.append(f"L{i}: {line_preview}")
+                            # If this match was already included in a previous snippet's context, skip it.
+                            if match_idx in shown_indices:
+                                continue
 
-                        # Create result entry
-                        result = f"File: {rel_path}\n"
-                        if matching_lines:
-                            result += f"Matches found: {len(matching_lines)}\n"
-                            result += "\n".join(matching_lines[:10])  # Limit to 10 lines
-                            if len(matching_lines) > 10:
-                                result += f"\n... and {len(matching_lines) - 10} more matches"
-                        else:
-                            result += "Query found in file content"
+                            snippets_created += 1
 
-                        results.append(result)
+                            # Define the context window: 50 lines before, the match, 50 lines after
+                            start_idx = max(0, match_idx - 50)
+                            end_idx = min(len(lines), match_idx + 51)
 
-                except Exception as e:
-                    # Skip files that can't be read
-                    continue
+                            file_result_parts.append(f"\n--- Snippet {snippets_created} (match on line {match_idx + 1}) ---")
 
-            # Sort results by relevance (files with more matches first)
-            def sort_key(result):
-                # Count the number of "L" lines (matching lines)
-                match_count = result.count("L")
-                return -match_count  # Negative for descending order
+                            for i in range(start_idx, end_idx):
+                                line_num = i + 1
+                                line_content = lines[i].rstrip()
 
-            results.sort(key=sort_key)
+                                # Highlight the specific matching line with a '>'
+                                if i == match_idx:
+                                    prefix = f"> {line_num:4d}"
+                                else:
+                                    prefix = f"  {line_num:4d}"
 
-            return results
+                                file_result_parts.append(f"{prefix}: {line_content}")
+                                shown_indices.add(i)
+
+                        # Add a summary if some matches were not shown in detail
+                        if total_matches_in_file > snippets_created:
+                            remaining_matches = total_matches_in_file - snippets_created
+                            file_result_parts.append(f"\n... and {remaining_matches} more match(es) in this file.")
+
+                        # The -total_matches_in_file is used to sort results by relevance (most matches first)
+                        results.append((-total_matches_in_file, "\n".join(file_result_parts)))
+
+            search_recursive(repo_dict, "")
+
+            # Sort results by match count (descending), then by file path (ascending)
+            results.sort()
+
+            # Extract just the formatted string part for the final output
+            final_results = [res[1] for res in results]
+
+            if not final_results:
+                return f"No results found for query: '{query}'"
+
+            # Join the results from different files with a clear separator
+            return "\n\n==================================================\n\n".join(final_results)
 
         except Exception as e:
             LOG.error(f"Error executing codebase_search tool: {str(e)}")
-            return []
+            return f"Error executing codebase_search tool: {str(e)}"

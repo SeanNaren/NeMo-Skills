@@ -1,8 +1,8 @@
 import json
 import re
 from typing import Dict
-
 import logging
+from nemo_skills.utils import get_logger_name
 
 LOG = logging.getLogger(get_logger_name(__file__))
 
@@ -11,29 +11,21 @@ class DialogProcessor:
     """Processes dialog output to extract tool calls and locations."""
 
     @staticmethod
-    def process_output(dialog, config=None) -> Dict:
-        """Process dialog output to extract tool calls or locations."""
-        raw_text = dialog[0]["generation"] if isinstance(dialog, list) else str(dialog)
-
-        # Remove thinking content if configured to do so
-        if config and getattr(config, 'remove_thinking_trace', True):
-            if "</think>" in raw_text:
-                dialog_text = raw_text.split("</think>")[1].lstrip().rstrip()
-            else:
-                dialog_text = raw_text
+    def extract_response(text: str, remove_thinking: bool):
+        if remove_thinking and "</think>" in text:
+            dialog_text = text.split("</think>")[1].lstrip().rstrip()
         else:
-            dialog_text = raw_text
+            dialog_text = text
 
         if "###Tool" in dialog_text:
-            LOG.info("        Found ###Tool block in output")
-            return DialogProcessor._extract_tool_calls(dialog_text)
+            LOG.info("Found ###Tool block in output")
+            return DialogProcessor.extract_tool_calls(dialog_text)
         elif "###Locations" in dialog_text:
-            LOG.info("        Found ###Locations block in output")
-            return DialogProcessor._extract_locations(dialog_text)
+            LOG.info("Found ###Locations block in output")
+            return DialogProcessor.extract_locations(dialog_text)
         else:
-            # Check if there's a JSON tool call after </think> without ###Tool wrapper
-            LOG.warning("        No ###Tool or ###Locations found, checking for implicit tool calls")
-            return DialogProcessor._extract_implicit_tool_calls(dialog_text)
+            LOG.warning("No ###Tool or ###Locations found, checking for implicit tool calls")
+            return DialogProcessor.extract_implicit_tool_calls(dialog_text)
 
     # USED
     @staticmethod
@@ -325,5 +317,5 @@ class DialogProcessor:
             LOG.info(f"Found implicit empty repo_tree tool call: {tool_data}")
             return {"type": "tool_calls", "tool_calls": [tool_data]}
 
-        LOG.warning("        No ###Tool, ###Locations, or implicit tool calls found in dialog output")
+        LOG.warning("No ###Tool, ###Locations, or implicit tool calls found in dialog output")
         return None
