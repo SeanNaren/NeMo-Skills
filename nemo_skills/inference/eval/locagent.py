@@ -42,9 +42,9 @@ class LocalAgentGenerationConfig(GenerateSolutionsConfig):
     prompt_config: str = "eval/locagent/system"
     mount_directory: str = "/repos/"
     remove_thinking: bool = True
-    total_steps: bool = 5
-    file_extensions: set = {".py"}
-    exclude_dirs: set = {
+    total_steps: int = 5
+    file_extensions: set = field(default_factory=lambda: {".py"})
+    exclude_dirs: set = field(default_factory=lambda: {
         "test",
         "tests",
         "testing",
@@ -110,7 +110,7 @@ class LocalAgentGenerationConfig(GenerateSolutionsConfig):
         "license",
         "changelog",
         "contributing",
-    }
+    })
     show_line_counts: bool = True
 
 
