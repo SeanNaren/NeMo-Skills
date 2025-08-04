@@ -488,6 +488,11 @@ def add_task(
                     override = override[11:]
                 sandbox_env_updates["PYTHONPATH"] = override + ":/app"
 
+        if "REPO_STRUCTURES" in os.environ:
+            repo_structures_dir = os.environ["REPO_STRUCTURES"]
+        else:
+            raise ValueError("REPO_STRUCTURES environment variable needs to be provided.")
+
         with temporary_env_update(cluster_config, sandbox_env_updates):
             commands.append(get_sandbox_command(cluster_config))
             sandbox_executor = get_executor(
@@ -498,7 +503,7 @@ def add_task(
                 gpus_per_node=0,
                 partition=partition,
                 time_min=time_min,
-                mounts=[],  # we don't want to mount anything
+                mounts=[f"{repo_structures_dir}:/repos/"],  # we don't want to mount anything
                 dependencies=dependencies,
                 job_name=task_name,
                 log_dir=log_dir,
