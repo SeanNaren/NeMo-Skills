@@ -43,8 +43,12 @@ class LocalAgentGenerationConfig(GenerateSolutionsConfig):
     mount_directory: str = "/repos/"
     remove_thinking: bool = True
     total_steps: int = 5
-    file_extensions: set = field(default_factory=lambda: {".py"})
-    exclude_dirs: set = field(default_factory=lambda: {
+
+    # CHANGED: Switched from set to list for OmegaConf compatibility
+    file_extensions: list = field(default_factory=lambda: [".py"])
+
+    # CHANGED: Switched from set to list for OmegaConf compatibility
+    exclude_dirs: list = field(default_factory=lambda: [
         "test",
         "tests",
         "testing",
@@ -110,7 +114,7 @@ class LocalAgentGenerationConfig(GenerateSolutionsConfig):
         "license",
         "changelog",
         "contributing",
-    })
+    ])
     show_line_counts: bool = True
 
 
