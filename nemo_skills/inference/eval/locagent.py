@@ -24,17 +24,41 @@ from nemo_skills.code_execution.sandbox import LocalSandbox
 from nemo_skills.inference.generate import GenerateSolutionsConfig, GenerationTask, InferenceConfig
 from nemo_skills.inference.model import server_params
 from nemo_skills.utils import get_help_message, get_logger_name, nested_dataclass, remove_thinking, setup_logging
+from nemo_skills.inference.eval.locagent_utils.dialog_processor import DialogProcessor
+from nemo_skills.inference.eval.locagent_utils.tool_executor import ToolExecutor
 
 LOG = logging.getLogger(get_logger_name(__file__))
 
 
-def extract_code_block(text: str):
-    match = re.search(r"```(?:[^\n]*\n)?(.*?)```", text, re.DOTALL)
-    return match.group(1) if match else None
+# def extract_code_block(text: str):
+#     match = re.search(r"```(?:[^\n]*\n)?(.*?)```", text, re.DOTALL)
+#     return match.group(1) if match else None
 
 
-def is_location_block(block_content: str):
-    return isinstance(block_content, str) and block_content.lstrip().startswith('###Locations')
+def extract_response(text: str):
+    if self.cfg.remove_thinking and "</think>" in text:
+        dialog_text = text.split("</think>")[1].lstrip().rstrip()
+    else:
+        dialog_text = text
+
+    if "###Tool" in dialog_text:
+        LOG.info("Found ###Tool block in output")
+        return DialogProcessor._extract_tool_calls(dialog_text)
+    elif "###Locations" in dialog_text:
+        LOG.info("Found ###Locations block in output")
+        return DialogProcessor._extract_locations(dialog_text)
+    else:
+        LOG.warning("No ###Tool or ###Locations found, checking for implicit tool calls")
+        return DialogProcessor._extract_implicit_tool_calls(dialog_text)
+
+
+def is_location_block(block_content: dict):
+    return block_content["type"] == "locations"
+    # return isinstance(block_content, str) and block_content.lstrip().startswith('###Locations')
+
+
+def is_tool_call(extracted_block: dict):
+    return block_content["type"] == "tool_calls"
 
 
 @nested_dataclass(kw_only=True)
@@ -45,6 +69,74 @@ class LocalAgentGenerationConfig(GenerateSolutionsConfig):
     mount_directory: str = "/repos/"
     remove_thinking: bool = True
     total_steps: bool = 5
+    file_extensions: set = {".py"}
+    exclude_dirs: set = {
+        "test",
+        "tests",
+        "testing",
+        "test_",
+        "_test",
+        "__pycache__",
+        ".git",
+        ".github",
+        "docs",
+        "examples",
+        "scripts",
+        "tools",
+        "utils",
+        "migrations",
+        "venv",
+        "env",
+        "node_modules",
+        "dist",
+        "build",
+        "target",
+        "bin",
+        "obj",
+        "coverage",
+        ".pytest_cache",
+        ".tox",
+        ".mypy_cache",
+        "locale",
+        "translations",
+        "i18n",
+        "l10n",
+        "static",
+        "assets",
+        "media",
+        "uploads",
+        "logs",
+        "tmp",
+        "temp",
+        "cache",
+        "vendor",
+        "lib",
+        "libs",
+        "dependencies",
+        "config",
+        "conf",
+        "settings",
+        "local_settings",
+        "fixtures",
+        "data",
+        "datasets",
+        "notebooks",
+        "jupyter",
+        "ipynb_checkpoints",
+        "deploy",
+        "deployment",
+        "docker",
+        "kubernetes",
+        "ci",
+        "cd",
+        "github",
+        "gitlab",
+        "bitbucket",
+        "readme",
+        "license",
+        "changelog",
+        "contributing",
+    }
 
 
 cs = hydra.core.config_store.ConfigStore.instance()
@@ -55,6 +147,7 @@ class LocAgentGenerationTask(GenerationTask):
     def __init__(self, cfg: LocalAgentGenerationConfig):
         super().__init__(cfg)
         self.sandbox = LocalSandbox()
+        self.tool_executor = ToolExecutor()
 
     async def process_single_datapoint(self, data_point, all_data):
         """Will do all necessary generations to get a single answer for the data point."""
@@ -74,8 +167,7 @@ class LocAgentGenerationTask(GenerationTask):
             except openai.BadRequestError as e:
                 if 'Please reduce the length of the messages or completion' in str(e):
                     LOG.warning(
-                        "LocAgent generation failed due to running out of context. "
-                        "Failing for subsequent subtasks automatically.",
+                        "LocAgent generation failed due to running out of context. " "Failing for subsequent subtasks automatically.",
                     )
                 raise e
 
@@ -85,12 +177,10 @@ class LocAgentGenerationTask(GenerationTask):
 
             if self.cfg.remove_thinking:
                 remove_thinking(llm_output, 'generation', self.cfg.thinking_begin, self.cfg.thinking_end)
-            extracted_block = extract_code_block(llm_output['generation'])
+            extracted_block = extract_response(llm_output['generation'])
 
             if not extracted_block:
-                LOG.warning(
-                    "Model failed to generate a code block. Ending generation."
-                )
+                LOG.warning("Model failed to generate a tool use or location. Ending generation.")
                 # todo (hov): add resampling with different temperature if necessary.
                 break
 
@@ -98,7 +188,7 @@ class LocAgentGenerationTask(GenerationTask):
                 break
 
             if is_tool_call(extracted_block):
-
+                tool_call_result = self.tool_executor.execute_tool(extracted_block, repo_dir)
 
         # generation is a dict["problem_id.subtask_step": full_solution] here
         return {'generation': task_solutions, 'num_generated_tokens': total_generated_tokens}
