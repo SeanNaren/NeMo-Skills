@@ -13,30 +13,45 @@
 # limitations under the License.
 
 import logging
+import pickle
 import sys
 from dataclasses import field
 
 import hydra
 import openai
-import re
 
-from nemo_skills.code_execution.sandbox import LocalSandbox
+from nemo_skills.inference.eval.locagent_utils.dialog_processor import DialogProcessor
+from nemo_skills.inference.eval.locagent_utils.tool_executor import ToolExecutor
 from nemo_skills.inference.generate import GenerateSolutionsConfig, GenerationTask, InferenceConfig
 from nemo_skills.inference.model import server_params
 from nemo_skills.utils import get_help_message, get_logger_name, nested_dataclass, remove_thinking, setup_logging
-from nemo_skills.inference.eval.locagent_utils.dialog_processor import DialogProcessor
-from nemo_skills.inference.eval.locagent_utils.tool_executor import ToolExecutor
 
 LOG = logging.getLogger(get_logger_name(__file__))
 
 
-# def extract_code_block(text: str):
-#     match = re.search(r"```(?:[^\n]*\n)?(.*?)```", text, re.DOTALL)
-#     return match.group(1) if match else None
+def tree_structure_from_pickle(data):
+    def build_level(d, prefix=""):
+        lines = []
+        items = list(d.keys())
+        for i, key in enumerate(items):
+            is_last = i == len(items) - 1
+            connector = "└── " if is_last else "|-- "
+            lines.append(f"{prefix}{connector}{key}")
+
+            node = d[key]
+            is_folder = isinstance(node, dict) and set(node.keys()) != {'classes', 'functions', 'text'}
+
+            if is_folder:
+                new_prefix = prefix + ("    " if is_last else "|   ")
+                lines.extend(build_level(node, new_prefix))
+        return lines
+
+    all_lines = build_level(data['structure'])
+    return ".\n" + "\n".join(all_lines)
 
 
-def extract_response(text: str):
-    if self.cfg.remove_thinking and "</think>" in text:
+def extract_response(text: str, remove_thinking: bool):
+    if remove_thinking and "</think>" in text:
         dialog_text = text.split("</think>")[1].lstrip().rstrip()
     else:
         dialog_text = text
@@ -57,7 +72,7 @@ def is_location_block(block_content: dict):
     # return isinstance(block_content, str) and block_content.lstrip().startswith('###Locations')
 
 
-def is_tool_call(extracted_block: dict):
+def is_tool_call(block_content: dict):
     return block_content["type"] == "tool_calls"
 
 
@@ -146,7 +161,6 @@ cs.store(name="base_locagent_generation_config", node=LocalAgentGenerationConfig
 class LocAgentGenerationTask(GenerationTask):
     def __init__(self, cfg: LocalAgentGenerationConfig):
         super().__init__(cfg)
-        self.sandbox = LocalSandbox()
         self.tool_executor = ToolExecutor()
 
     async def process_single_datapoint(self, data_point, all_data):
@@ -155,9 +169,13 @@ class LocAgentGenerationTask(GenerationTask):
         previous_llm_code = [None] * total_steps
         task_solutions = {}
         total_generated_tokens = 0
+        instance_filepath = f"{self.cfg.mount_directory}/{data_point['instance_id']}.pickle"
 
-        # todo: execute tree structure so that we can append to prompt
-        self.sandbox.execute_code("tree ")
+        with open(instance_filepath, 'rb') as f:
+            data = pickle.load(f)
+        tree_structure = tree_structure_from_pickle(data)
+
+        data_point['repo_tree'] = tree_structure
 
         for cur_step in range(total_steps):
             try:
@@ -177,7 +195,10 @@ class LocAgentGenerationTask(GenerationTask):
 
             if self.cfg.remove_thinking:
                 remove_thinking(llm_output, 'generation', self.cfg.thinking_begin, self.cfg.thinking_end)
-            extracted_block = extract_response(llm_output['generation'])
+            extracted_block = extract_response(
+                text=llm_output['generation'],
+                remove_thinking=self.cfg.remove_thinking
+            )
 
             if not extracted_block:
                 LOG.warning("Model failed to generate a tool use or location. Ending generation.")
@@ -188,7 +209,7 @@ class LocAgentGenerationTask(GenerationTask):
                 break
 
             if is_tool_call(extracted_block):
-                tool_call_result = self.tool_executor.execute_tool(extracted_block, repo_dir)
+                tool_call_result = self.tool_executor.execute_tool(extracted_block, data)
 
         # generation is a dict["problem_id.subtask_step": full_solution] here
         return {'generation': task_solutions, 'num_generated_tokens': total_generated_tokens}
