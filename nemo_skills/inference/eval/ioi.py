@@ -31,9 +31,17 @@ LOG = logging.getLogger(get_logger_name(__file__))
 
 
 def extract_code_block_and_test_input(text: str, language: str):
-    py_matches = re.findall(rf"```{language}(.*?)```", text, re.DOTALL)
-    in_matches = re.findall(r"```inputs(.*?)```", text, re.DOTALL)
-    return py_matches[-1].strip() if py_matches else None, in_matches[-1].strip() if in_matches else None
+    code_blocks = re.findall(rf"```{language}(.*?)```", text, re.DOTALL)
+    if not code_blocks:
+        return None, None  # Return None if no code block is found.
+    full_block = code_blocks[-1]
+    input_blocks = re.findall(r'"""(.*?)"""', full_block, re.DOTALL)
+    if not input_blocks:
+        # If no input block is found, return the entire code block and None for inputs.
+        return full_block.strip(), None
+    inputs = input_blocks[-1].strip()
+    code = full_block[:full_block.rfind('"""')].strip()
+    return code, inputs
 
 
 @nested_dataclass(kw_only=True)
@@ -69,9 +77,9 @@ class IOIExecutionGenerationTask(GenerationTask):
         """Will do all necessary generations to get a single answer for the data point."""
         total_steps = self.cfg.total_steps
         chat_history = []
-        print("Processing single element")
+
         llm_output = await super().process_single_datapoint(data_point, all_data)
-        print("Processed")
+
         chat_history.append(llm_output)
 
         # run execution/improve steps
@@ -89,8 +97,8 @@ class IOIExecutionGenerationTask(GenerationTask):
                 language=self.cfg.language
             )
             print("sandbox output", output)
-            data_point['solution'] = f"```{self.cfg.language}\n{code_block}\n```"
-            data_point['inputs'] = f"```inputs\n{test_inputs}\n```"
+            test_inputs = f'"""\n{test_inputs}\n"""\n'
+            data_point['solution'] = f"```{self.cfg.language}\n{code_block}\n{test_inputs}```"
             data_point['output'] = format_code_output(
                 output,
                 code_output_begin=self.prompt.config.code_tags.code_output_begin,
