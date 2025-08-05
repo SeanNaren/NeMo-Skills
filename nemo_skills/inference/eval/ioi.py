@@ -97,9 +97,10 @@ class IOIExecutionGenerationTask(GenerationTask):
                 )
 
             # generate test inputs
+            data_point['solution'] = f"```{self.cfg.language}\n{cur_solution}```"
             test_llm_output = await super().process_single_datapoint(data_point, all_data, prompt=self.test_prompt)
 
-            test_inputs = extract_test_input(test_llm_output["generation"], )
+            test_inputs = extract_test_input(test_llm_output["generation"])
             if not test_inputs:
                 raise ValueError(
                     f"Failed to generate a test input, received: {test_llm_output}"
@@ -110,8 +111,6 @@ class IOIExecutionGenerationTask(GenerationTask):
                 std_input=test_inputs,
                 language=self.cfg.language
             )
-            print("sandbox output", output)
-            data_point['solution'] = f"```{self.cfg.language}\n{cur_solution}```"
             data_point['inputs'] = f"```inputs\n{test_inputs}\n```"
             data_point['output'] = format_code_output(
                 output,
