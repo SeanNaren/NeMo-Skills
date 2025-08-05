@@ -134,9 +134,8 @@ class LocAgentGenerationTask(GenerationTask):
     async def process_single_datapoint(self, data_point, all_data):
         """Will do all necessary generations to get a single answer for the data point."""
         total_steps = self.cfg.total_steps
-        previous_llm_code = [None] * total_steps
+        chat_history = []
 
-        task_solutions = {}
         total_generated_tokens = 0
         instance_filepath = f"{self.cfg.mount_directory}/{data_point['instance_id']}.pkl"
 
@@ -162,7 +161,7 @@ class LocAgentGenerationTask(GenerationTask):
 
             total_generated_tokens += llm_output.get('num_generated_tokens', 0)
 
-            previous_llm_code[cur_step] = llm_output
+            chat_history.append(llm_output)
 
             if self.cfg.remove_thinking:
                 remove_thinking(llm_output, 'generation', self.cfg.thinking_begin, self.cfg.thinking_end)
@@ -172,15 +171,12 @@ class LocAgentGenerationTask(GenerationTask):
                 LOG.warning("Model failed to generate a tool use or location. Ending generation.")
                 # todo (hov): add resampling with different temperature if necessary.
                 break
-
             if extracted_block["type"] == "locations":
                 break
 
             if extracted_block["type"] == "tool_calls":
-                """
-                {'type': 'tool_calls', 'tool_calls': [{'tool': 'view', 'path': 'astropy/modeling/separable.py'}]}
-                """
-                tool_call_result = self.tool_executor.execute_tool(extracted_block, data)
+                print("extracted_block", extracted_block)
+                tool_call_result = self.tool_executor.execute_tool(extracted_block["tool_call"], data)
 
                 data_point['turns'][-1]['assistant'] = extracted_block
                 data_point['turns'].append(
@@ -194,7 +190,15 @@ class LocAgentGenerationTask(GenerationTask):
         # generation is a dict["problem_id.subtask_step": full_solution] here
         LOG.info("Succesfully executed!")
         exit(0)
-        return {'generation': task_solutions, 'num_generated_tokens': total_generated_tokens}
+        """
+        [
+            User: Problem statement,
+            Assistant: {“generation”: generation with reasoning trace, “tool_call”: … },
+            User: {“tool_output”: “”},
+            Assistant: {“generation”: … “location”: …}
+        ]
+        """
+        return {'generation': chat_history, 'num_generated_tokens': total_generated_tokens}
 
 
 GENERATION_TASK_CLASS = LocAgentGenerationTask

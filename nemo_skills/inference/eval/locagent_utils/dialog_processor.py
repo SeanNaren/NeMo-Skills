@@ -47,7 +47,7 @@ class DialogProcessor:
                 else:
                     tool_data["tool"] = "unknown"
 
-                return {"type": "tool_calls", "tool_calls": [tool_data]}
+                return {"type": "tool_calls", "tool_call": tool_data}
             except json.JSONDecodeError as e:
                 LOG.warning(f"Failed to parse tool call JSON: {e}")
                 return None
@@ -121,7 +121,7 @@ class DialogProcessor:
                     else:
                         tool_data["tool"] = "unknown"
                     LOG.info(f"Found JSON tool call after </think>: {tool_data}")
-                    return {"type": "tool_calls", "tool_calls": [tool_data]}
+                    return {"type": "tool_calls", "tool_call": tool_data}
                 except json.JSONDecodeError as e:
                     LOG.warning(f"Failed to parse JSON after </think>: {e}")
 
@@ -138,7 +138,7 @@ class DialogProcessor:
                     "view_range": None,
                 }
                 LOG.info(f"Found simple file path request: {tool_data['path']}")
-                return {"type": "tool_calls", "tool_calls": [tool_data]}
+                return {"type": "tool_calls", "tool_call": tool_data}
 
             # Third try: Simple search query request
             # Look for quoted or unquoted search terms after </think>
@@ -165,7 +165,7 @@ class DialogProcessor:
                             "query": search_term,
                         }
                         LOG.info(f"Found simple search request: {tool_data['query']}")
-                        return {"type": "tool_calls", "tool_calls": [tool_data]}
+                        return {"type": "tool_calls", "tool_call": tool_data}
 
         # Look for specific tool call patterns
         # View tool: {"path": "...", "view_range": [...]}
@@ -182,7 +182,7 @@ class DialogProcessor:
                 tool_data = json.loads(json_match.group())
                 tool_data["tool"] = "view"
                 LOG.warning(f"Found implicit view tool call: {tool_data}")
-                return {"type": "tool_calls", "tool_calls": [tool_data]}
+                return {"type": "tool_calls", "tool_call": tool_data}
             except json.JSONDecodeError as e:
                 LOG.warning(f"Failed to parse implicit view tool call JSON: {e}")
 
@@ -197,7 +197,7 @@ class DialogProcessor:
                     LOG.warning(f"Empty query in codebase_search tool call")
                 else:
                     LOG.info(f"Found implicit codebase_search tool call: {tool_data}")
-                    return {"type": "tool_calls", "tool_calls": [tool_data]}
+                    return {"type": "tool_calls", "tool_call": tool_data}
             except json.JSONDecodeError as e:
                 LOG.warning(f"Failed to parse implicit codebase_search tool call JSON: {e}")
 
@@ -208,7 +208,7 @@ class DialogProcessor:
                 tool_data = json.loads(json_match.group())
                 tool_data["tool"] = "repo_tree"
                 LOG.info(f"Found implicit repo_tree tool call: {tool_data}")
-                return {"type": "tool_calls", "tool_calls": [tool_data]}
+                return {"type": "tool_calls", "tool_call": tool_data}
             except json.JSONDecodeError as e:
                 LOG.warning(f"Failed to parse implicit repo_tree tool call JSON: {e}")
 
@@ -308,14 +308,14 @@ class DialogProcessor:
                         "query": search_term,
                     }
                     LOG.info(f"Found implicit search request: {tool_data['query']}")
-                    return {"type": "tool_calls", "tool_calls": [tool_data]}
+                    return {"type": "tool_calls", 'tool_call': tool_data}
 
         # Check for empty JSON object (repo_tree tool)
         empty_json_match = re.search(r"^\s*\{\s*\}\s*$", dialog_text.strip())
         if empty_json_match:
             tool_data = {"tool": "repo_tree"}
             LOG.info(f"Found implicit empty repo_tree tool call: {tool_data}")
-            return {"type": "tool_calls", "tool_calls": [tool_data]}
+            return {"type": "tool_calls", "tool_call": tool_data}
 
         LOG.warning("No ###Tool, ###Locations, or implicit tool calls found in dialog output")
         return None

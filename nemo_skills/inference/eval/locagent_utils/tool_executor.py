@@ -161,7 +161,7 @@ class ToolExecutor:
                             search_recursive(node, new_path)
 
                     elif self._is_file_node(node):
-                        if os.path.splitext(name)[1] not in self.cfg.code_extensions:
+                        if os.path.splitext(name)[1] not in self.cfg.file_extensions:
                             continue
 
                         lines = node["text"]
