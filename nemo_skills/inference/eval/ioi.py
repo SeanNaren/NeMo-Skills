@@ -114,7 +114,7 @@ GENERATION_TASK_CLASS = IOIExecutionGenerationTask
 
 
 # Update the hydra main to use the class method
-@hydra.main(version_base=None, config_name='base_locagent_generation_config')
+@hydra.main(version_base=None, config_name='base_ioi_generation_config')
 def ioi_generation(cfg: IOIExecutionConfig):
     cfg = IOIExecutionConfig(_init_nested=True, **cfg)
     LOG.info("Config used: %s", cfg)
