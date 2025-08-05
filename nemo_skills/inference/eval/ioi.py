@@ -15,6 +15,7 @@
 import logging
 import re
 import sys
+import time
 from dataclasses import field
 
 import hydra
@@ -85,9 +86,10 @@ class IOIExecutionGenerationTask(GenerationTask):
         llm_output = await super().process_single_datapoint(data_point, all_data, prompt=self.prompt)
 
         chat_history.append(llm_output)
-
+        start = time.time()
         # run execution/improve steps
         for cur_step in range(total_steps):
+            start_iter = time.time()
 
             cur_solution = extract_code_block(llm_output['generation'])
 
@@ -131,7 +133,9 @@ class IOIExecutionGenerationTask(GenerationTask):
                     )
                 raise e
             chat_history.append([test_llm_output, llm_output])
+            print(f"Time taken for step {time.time() - start_iter}s")
 
+        print(f"Time taken for generation {time.time() - start}s")
         code_block = extract_code_block(llm_output["generation"], self.cfg.language)
         return {'generation': code_block, 'steps': chat_history}
 
