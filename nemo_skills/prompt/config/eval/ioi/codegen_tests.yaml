@@ -52,6 +52,8 @@ user: |-
   
   ## Test Case
   
+  Let's come up with a new set of test cases where there are duplicate max numbers.
+  
   ```inputs
   5
   2
@@ -60,9 +62,14 @@ user: |-
   5
   ```
   
-  Here is the problem for which you need to generate test inputs:
+  Here is the actual problem for which you need to generate test inputs:
+
   ## Problem
+
   {question}
   
   ## Proposed Solution
+
   {solution}
+  
+  ## Test Case

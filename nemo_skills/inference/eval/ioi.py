@@ -95,7 +95,7 @@ class IOIExecutionGenerationTask(GenerationTask):
                 raise ValueError(
                     f"Failed to generate a solution, received {llm_output}"
                 )
-
+            print(f"{cur_step}/{total_steps}: successfully generated solution.")
             # generate test inputs
             data_point['solution'] = f"```{self.cfg.language}\n{cur_solution}```"
             test_llm_output = await super().process_single_datapoint(data_point, all_data, prompt=self.test_prompt)
@@ -105,6 +105,7 @@ class IOIExecutionGenerationTask(GenerationTask):
                 raise ValueError(
                     f"Failed to generate a test input, received: {test_llm_output}"
                 )
+            print(f"{cur_step}/{total_steps}: successfully generated tests.")
 
             output, _ = self.sandbox.execute_code(
                 generated_code=cur_solution,
@@ -118,6 +119,7 @@ class IOIExecutionGenerationTask(GenerationTask):
                 code_output_end=self.prompt.config.code_tags.code_output_end,
                 code_output_format=self.prompt.config.code_tags.code_output_format
             )
+            print(f"{cur_step}/{total_steps}: successfully executed std inputs.")
             try:
                 llm_output = await super().process_single_datapoint(data_point, all_data, prompt=self.improve_prompt)
             # TODO: this is a hack (as not all servers return that),
