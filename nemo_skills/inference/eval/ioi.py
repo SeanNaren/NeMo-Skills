@@ -69,13 +69,15 @@ class IOIExecutionGenerationTask(GenerationTask):
         """Will do all necessary generations to get a single answer for the data point."""
         total_steps = self.cfg.total_steps
         chat_history = []
-
+        print("Processing single element")
         llm_output = await super().process_single_datapoint(data_point, all_data)
+        print("Processed")
         chat_history.append(llm_output)
 
         # run execution/improve steps
         for cur_step in range(total_steps):
-            code_block, test_inputs = extract_code_block_and_test_input(llm_output, self.cfg.language)
+            code_block, test_inputs = extract_code_block_and_test_input(llm_output["generation"], self.cfg.language)
+            print("extracted code block and inputs", code_block, test_inputs)
             if not code_block or not test_inputs:
                 raise ValueError(
                     f"Failed to generate a code block and test input, received: {llm_output}"
@@ -86,6 +88,7 @@ class IOIExecutionGenerationTask(GenerationTask):
                 std_input=test_inputs,
                 language=self.cfg.language
             )
+            print("sandbox output", output)
             data_point['solution'] = f"```{self.cfg.language}\n{code_block}\n```"
             data_point['inputs'] = f"```inputs\n{test_inputs}\n```"
             data_point['output'] = format_code_output(
@@ -106,7 +109,7 @@ class IOIExecutionGenerationTask(GenerationTask):
                 raise e
             chat_history.append(llm_output)
 
-        code_block, test_inputs = extract_code_block_and_test_input(llm_output, self.cfg.language)
+        code_block, test_inputs = extract_code_block_and_test_input(llm_output["generation"], self.cfg.language)
         return {'generation': code_block, 'steps': chat_history}
 
 
