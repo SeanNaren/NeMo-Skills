@@ -19,13 +19,13 @@ class DialogProcessor:
 
         if "###Tool" in dialog_text:
             LOG.info("Found ###Tool block in output")
-            return DialogProcessor.extract_tool_calls(dialog_text)
+            return DialogProcessor._extract_tool_calls(dialog_text)
         elif "###Locations" in dialog_text:
             LOG.info("Found ###Locations block in output")
-            return DialogProcessor.extract_locations(dialog_text)
+            return DialogProcessor._extract_locations(dialog_text)
         else:
             LOG.warning("No ###Tool or ###Locations found, checking for implicit tool calls")
-            return DialogProcessor.extract_implicit_tool_calls(dialog_text)
+            return DialogProcessor._extract_implicit_tool_calls(dialog_text)
 
     # USED
     @staticmethod

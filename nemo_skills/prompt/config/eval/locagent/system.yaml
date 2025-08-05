@@ -33,7 +33,7 @@ system: |-
       - omit `view_range` to show the whole file
     Example:
     ```json
-    {"path": "src/utils/text.py", "view_range": [40, 80]}
+    {{"path": "src/utils/text.py", "view_range": [40, 80]}}
     ```
 
   - `repo_tree`
@@ -49,7 +49,7 @@ system: |-
                    and 10 lines after, inclusive)
     Example:
     ```json
-    {"query": "deprecated_function("}
+    {{"query": "deprecated_function("}}
     ```
 
   **Interaction protocol**

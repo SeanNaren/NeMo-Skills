@@ -15,6 +15,7 @@
 import logging
 import pickle
 import sys
+from copy import deepcopy
 from dataclasses import field
 
 import hydra
@@ -127,24 +128,29 @@ class LocAgentGenerationTask(GenerationTask):
         super().__init__(cfg)
         self.tool_executor = ToolExecutor(cfg)
 
+    def log_example_prompt(self, data):
+        return
+
     async def process_single_datapoint(self, data_point, all_data):
         """Will do all necessary generations to get a single answer for the data point."""
         total_steps = self.cfg.total_steps
         previous_llm_code = [None] * total_steps
-        chat_history = [data_point]
+
         task_solutions = {}
         total_generated_tokens = 0
-        instance_filepath = f"{self.cfg.mount_directory}/{data_point['instance_id']}.pickle"
+        instance_filepath = f"{self.cfg.mount_directory}/{data_point['instance_id']}.pkl"
 
         with open(instance_filepath, 'rb') as f:
             data = pickle.load(f)
         tree_structure = tree_structure_from_pickle(data, self.cfg.exclude_dirs)
 
-        data_point['repo_tree'] = tree_structure
+        data_point['turns'] = [
+            {"problem_statement": data_point["problem_statement"], 'repo_tree': tree_structure}
+        ]
 
         for cur_step in range(total_steps):
             try:
-                llm_output = await super().process_single_datapoint(chat_history, all_data)
+                llm_output = await super().process_single_datapoint(data_point, all_data)
             # TODO: this is a hack (as not all servers return that),
             # but eventually we should support handling errors like this globally for all generations
             except openai.BadRequestError as e:
@@ -171,13 +177,23 @@ class LocAgentGenerationTask(GenerationTask):
                 break
 
             if extracted_block["type"] == "tool_calls":
+                """
+                {'type': 'tool_calls', 'tool_calls': [{'tool': 'view', 'path': 'astropy/modeling/separable.py'}]}
+                """
                 tool_call_result = self.tool_executor.execute_tool(extracted_block, data)
 
-            LOG.info(tool_call_result)
-            break
+                data_point['turns'][-1]['assistant'] = extracted_block
+                data_point['turns'].append(
+                    {
+                        "problem_statement": tool_call_result,
+                        "repo_tree": tree_structure,
+                    }
+                )
+            print("Current messages", data_point['turns'])
 
         # generation is a dict["problem_id.subtask_step": full_solution] here
         LOG.info("Succesfully executed!")
+        exit(0)
         return {'generation': task_solutions, 'num_generated_tokens': total_generated_tokens}
 
 
