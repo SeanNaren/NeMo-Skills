@@ -11,12 +11,7 @@ class DialogProcessor:
     """Processes dialog output to extract tool calls and locations."""
 
     @staticmethod
-    def extract_response(text: str, remove_thinking: bool):
-        if remove_thinking and "</think>" in text:
-            dialog_text = text.split("</think>")[1].lstrip().rstrip()
-        else:
-            dialog_text = text
-
+    def extract_response(dialog_text: str):
         if "###Tool" in dialog_text:
             LOG.info("Found ###Tool block in output")
             return DialogProcessor._extract_tool_calls(dialog_text)

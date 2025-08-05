@@ -46,7 +46,7 @@ class LocalAgentGenerationConfig(GenerateSolutionsConfig):
     total_steps: int = 5
 
     # CHANGED: Switched from set to list for OmegaConf compatibility
-    file_extensions: list = field(default_factory=lambda: [".py"])
+    exclude_file_exts: list = field(default_factory=lambda: ["py"])
 
     # CHANGED: Switched from set to list for OmegaConf compatibility
     exclude_dirs: list = field(default_factory=lambda: [
@@ -139,12 +139,22 @@ class LocAgentGenerationTask(GenerationTask):
         total_generated_tokens = 0
         instance_filepath = f"{self.cfg.mount_directory}/{data_point['instance_id']}.pkl"
 
+        # repo_dict is dict with 'structure' containing the actual repo tree dict_keys(['repo', 'base_commit',
+        # 'structure', 'instance_id'])
         with open(instance_filepath, 'rb') as f:
-            data = pickle.load(f)
-        tree_structure = tree_structure_from_pickle(data, self.cfg.exclude_dirs)
+            repo_dict = pickle.load(f)
+        tree_structure = tree_structure_from_pickle(repo_dict, self.cfg.exclude_dirs, self.cfg.exclude_file_exts)
+
+        inputs = f"""
+### Problem Description
+{data_point["problem_statement"]}
+
+### Repository Structure
+{tree_structure}
+"""
 
         data_point['turns'] = [
-            {"problem_statement": data_point["problem_statement"], 'repo_tree': tree_structure}
+            {"inputs": inputs}
         ]
 
         for cur_step in range(total_steps):
@@ -165,7 +175,7 @@ class LocAgentGenerationTask(GenerationTask):
 
             if self.cfg.remove_thinking:
                 remove_thinking(llm_output, 'generation', self.cfg.thinking_begin, self.cfg.thinking_end)
-            extracted_block = DialogProcessor.extract_response(text=llm_output['generation'], remove_thinking=self.cfg.remove_thinking)
+            extracted_block = DialogProcessor.extract_response(llm_output['generation'])
 
             if not extracted_block:
                 LOG.warning("Model failed to generate a tool use or location. Ending generation.")
@@ -176,20 +186,17 @@ class LocAgentGenerationTask(GenerationTask):
 
             if extracted_block["type"] == "tool_calls":
                 print("extracted_block", extracted_block)
-                tool_call_result = self.tool_executor.execute_tool(extracted_block["tool_call"], data)
+                tool_call_result = self.tool_executor.execute_tool(extracted_block["tool_call"], repo_dict)
 
                 data_point['turns'][-1]['assistant'] = extracted_block
                 data_point['turns'].append(
                     {
-                        "problem_statement": tool_call_result,
-                        "repo_tree": tree_structure,
+                        "inputs": tool_call_result,
                     }
                 )
             print("Current messages", data_point['turns'])
 
         # generation is a dict["problem_id.subtask_step": full_solution] here
-        LOG.info("Succesfully executed!")
-        exit(0)
         """
         [
             User: Problem statement,

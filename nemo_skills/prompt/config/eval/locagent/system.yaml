@@ -91,9 +91,4 @@ system: |-
   - Do not emit `###Locations` until you are confident you have found **all**
     necessary edit locations.
 
-user: |-  
-  ### Problem Description
-  {problem_statement}
-  
-  ### Repository Structure
-  {repo_tree}
+user: "{inputs}"

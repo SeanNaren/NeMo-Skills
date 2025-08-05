@@ -30,7 +30,7 @@ class ToolExecutor:
         """Helper function to navigate the nested dict using a file path."""
         # Normalize path to handle both empty and non-empty paths
         parts = [part for part in path.split('/') if part]
-        current_level = repo_dict
+        current_level = repo_dict["structure"]
         try:
             for part in parts:
                 current_level = current_level[part]
@@ -89,7 +89,7 @@ class ToolExecutor:
                 return f"Error: Start line {start_line} is greater than end line {end_line}"
 
             result_lines = [f"{i+1:4d}: {lines[i]}" for i in range(start_line - 1, end_line)]
-            LOG.success(f"Successfully read {len(result_lines)} lines from {file_path}")
+            LOG.info(f"Successfully read {len(result_lines)} lines from {file_path}")
             file_content = f"File: {file_path} (lines {start_line}-{end_line})\n" + "\n".join(result_lines)
             return file_content
 
@@ -192,9 +192,9 @@ class ToolExecutor:
 
                             snippets_created += 1
 
-                            # Define the context window: 50 lines before, the match, 50 lines after
-                            start_idx = max(0, match_idx - 50)
-                            end_idx = min(len(lines), match_idx + 51)
+                            # Define the context window: 20 lines before, the match, 20 lines after
+                            start_idx = max(0, match_idx - 20)
+                            end_idx = min(len(lines), match_idx + 21)
 
                             file_result_parts.append(f"\n--- Snippet {snippets_created} (match on line {match_idx + 1}) ---")
 
