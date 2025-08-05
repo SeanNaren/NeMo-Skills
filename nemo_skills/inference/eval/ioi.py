@@ -113,7 +113,7 @@ class IOIExecutionGenerationTask(GenerationTask):
                 language=self.cfg.language
             )
             data_point['inputs'] = f"```inputs\n{test_inputs}\n```"
-            data_point['output'] = format_code_output(
+            data_point['outputs'] = format_code_output(
                 output,
                 code_output_begin=self.prompt.config.code_tags.code_output_begin,
                 code_output_end=self.prompt.config.code_tags.code_output_end,
