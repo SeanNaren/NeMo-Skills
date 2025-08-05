@@ -30,26 +30,23 @@ from nemo_skills.utils import get_help_message, get_logger_name, nested_dataclas
 LOG = logging.getLogger(get_logger_name(__file__))
 
 
-def extract_code_block_and_test_input(text: str, language: str):
-    code_blocks = re.findall(rf"```{language}(.*?)```", text, re.DOTALL)
-    if not code_blocks:
-        return None, None  # Return None if no code block is found.
-    full_block = code_blocks[-1]
-    input_blocks = re.findall(r'"""(.*?)"""', full_block, re.DOTALL)
-    if not input_blocks:
-        # If no input block is found, return the entire code block and None for inputs.
-        return full_block.strip(), None
-    inputs = input_blocks[-1].strip()
-    code = full_block[:full_block.rfind('"""')].strip()
-    return code, inputs
+def extract_code_block(text: str, language: str = "python"):
+    matches = re.findall(rf"```{language}(.*?)```", text, re.DOTALL)
+    return matches[-1].strip() if matches else None
+
+
+def extract_test_input(text: str):
+    matches = re.findall(r"```inputs(.*?)```", text, re.DOTALL)
+    return matches[-1].strip() if matches else None
 
 
 @nested_dataclass(kw_only=True)
 class IOIExecutionConfig(GenerateSolutionsConfig):
     inference: InferenceConfig = field(default_factory=InferenceConfig)  # LLM call parameters
     server: dict = field(default_factory=dict)
-    prompt_config: str = "eval/ioi/codegen_tests"
-    fix_prompt_config: str = "eval/ioi/codegen_improve"
+    prompt_config: str = "eval/ioi/codegen"
+    test_prompt_config: str = "eval/ioi/codegen_tests"
+    improve_prompt_config: str = "eval/ioi/codegen_improve"
     language: str = "python"
     total_steps: int = 5
 
@@ -61,8 +58,14 @@ cs.store(name="base_ioi_generation_config", node=IOIExecutionConfig)
 class IOIExecutionGenerationTask(GenerationTask):
     def __init__(self, cfg: IOIExecutionConfig):
         super().__init__(cfg)
-        self.repair_prompt = get_prompt(
-            self.cfg.fix_prompt_config,
+        self.improve_prompt = get_prompt(
+            self.cfg.improve_prompt_config,
+            self.cfg.prompt_template,
+            self.cfg.code_tags,
+            examples_type=self.cfg.examples_type
+        )
+        self.test_prompt = get_prompt(
+            self.cfg.test_prompt_config,
             self.cfg.prompt_template,
             self.cfg.code_tags,
             examples_type=self.cfg.examples_type
@@ -78,27 +81,38 @@ class IOIExecutionGenerationTask(GenerationTask):
         total_steps = self.cfg.total_steps
         chat_history = []
 
-        llm_output = await super().process_single_datapoint(data_point, all_data)
+        # generate an initial solution
+        llm_output = await super().process_single_datapoint(data_point, all_data, prompt=self.prompt)
 
         chat_history.append(llm_output)
 
         # run execution/improve steps
         for cur_step in range(total_steps):
-            code_block, test_inputs = extract_code_block_and_test_input(llm_output["generation"], self.cfg.language)
-            print("extracted code block and inputs", code_block, test_inputs)
-            if not code_block or not test_inputs:
+
+            cur_solution = extract_code_block(llm_output['generation'])
+
+            if not cur_solution:
                 raise ValueError(
-                    f"Failed to generate a code block and test input, received: {llm_output}"
+                    f"Failed to generate a solution, received {llm_output}"
+                )
+
+            # generate test inputs
+            test_llm_output = await super().process_single_datapoint(data_point, all_data, prompt=self.test_prompt)
+
+            test_inputs = extract_test_input(test_llm_output["generation"], )
+            if not test_inputs:
+                raise ValueError(
+                    f"Failed to generate a test input, received: {test_llm_output}"
                 )
 
             output, _ = self.sandbox.execute_code(
-                generated_code=code_block,
+                generated_code=cur_solution,
                 std_input=test_inputs,
                 language=self.cfg.language
             )
             print("sandbox output", output)
-            test_inputs = f'"""\n{test_inputs}\n"""\n'
-            data_point['solution'] = f"```{self.cfg.language}\n{code_block}\n{test_inputs}```"
+            data_point['solution'] = f"```{self.cfg.language}\n{cur_solution}```"
+            data_point['inputs'] = f"```inputs\n{test_inputs}\n```"
             data_point['output'] = format_code_output(
                 output,
                 code_output_begin=self.prompt.config.code_tags.code_output_begin,
@@ -106,7 +120,7 @@ class IOIExecutionGenerationTask(GenerationTask):
                 code_output_format=self.prompt.config.code_tags.code_output_format
             )
             try:
-                llm_output = await super().process_single_datapoint(data_point, all_data, prompt=self.repair_prompt)
+                llm_output = await super().process_single_datapoint(data_point, all_data, prompt=self.improve_prompt)
             # TODO: this is a hack (as not all servers return that),
             # but eventually we should support handling errors like this globally for all generations
             except openai.BadRequestError as e:
@@ -115,9 +129,9 @@ class IOIExecutionGenerationTask(GenerationTask):
                         "LocAgent generation failed due to running out of context. " "Failing for subsequent subtasks automatically.",
                     )
                 raise e
-            chat_history.append(llm_output)
+            chat_history.append([test_llm_output, llm_output])
 
-        code_block, test_inputs = extract_code_block_and_test_input(llm_output["generation"], self.cfg.language)
+        code_block = extract_code_block(llm_output["generation"], self.cfg.language)
         return {'generation': code_block, 'steps': chat_history}
 
 

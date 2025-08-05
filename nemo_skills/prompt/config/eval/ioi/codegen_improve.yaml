@@ -3,17 +3,11 @@
 system: ""
 
 user: |-
-  You are a competitive programmer. You are given a proposed solution, and the execution output from a set of test cases. Make improvements to the solution based on the feedback and propose a new solution with test cases.
-  
-  Right after your code, generate a small set of test inputs to test the code.
+  You are a competitive programmer. You are given a proposed solution, and the execution output from a set of test cases. Make improvements to the solution based on the feedback and propose a new solution.
   
   The final improved solution should be in the following format:
   ```python
   # Your code here
-  
-  """
-  # Your test input here. It should be something that can be passed to the code directly.
-  """
   ```
   
   Here is an example:
@@ -38,7 +32,7 @@ user: |-
   Please write the complete script to solve this.
   
   ## Proposed Solution
-  
+
   ```python
   # Your code here
   import sys
@@ -54,20 +48,19 @@ user: |-
   except (ValueError, IndexError):
       # Fails silently on bad input.
       pass
-
-  """
+  ```
+  ```inputs
   5
   2
   9
   1
   5
-  """
   ```
   ```outputs
   9
   ```
   
-  The solution looks correct, we can simplify the solution a bit, and come up with some harder test cases:
+  The solution looks correct, we can simplify the solution a bit:
   ```python
   import sys
   try:
@@ -75,15 +68,6 @@ user: |-
       print(max(numbers))
   except ValueError:
       pass
-
-  """
-  2
-  1
-  51
-  12
-  4
-  6
-  """
   ```
   
   Here is the problem for which you need to generate/complete code:
@@ -92,4 +76,5 @@ user: |-
   
   ## Proposed Solution
   {solution}
+  {inputs}
   {outputs}
