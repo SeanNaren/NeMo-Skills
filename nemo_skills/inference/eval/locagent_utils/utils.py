@@ -1,5 +1,5 @@
 import re
-from typing import List
+from typing import List, Dict
 import os
 
 
@@ -11,13 +11,52 @@ def get_version():
             return f.read().strip()
     return "0.0.0"
 
-def tree_structure_from_pickle(repo_dict: dict, exclude_dirs: list, exclude_file_exts: list):
+def filter_repo_dict(repo_dict: dict, exclude_dirs: list, file_extensions: list) -> dict:
+    """Filter repo_dict by removing excluded directories and files with unwanted extensions.
+    
+    Returns a new repo_dict with filtered structure, removing empty directories.
+    """
+    def filter_level(d):
+        filtered = {}
+        for key, value in d.items():
+            # Skip excluded directories
+            if key in exclude_dirs:
+                continue
+                
+            # Check if it's a file (has extension) and if extension is allowed
+            if "." in key and key.split(".")[-1] not in file_extensions:
+                continue
+                
+            # Determine if this is a folder
+            is_folder = isinstance(value, dict) and set(value.keys()) != {'classes', 'functions', 'text'}
+            
+            if is_folder:
+                # Recursively filter the folder
+                filtered_subfolder = filter_level(value)
+                # Only include the folder if it has content after filtering
+                if filtered_subfolder:
+                    filtered[key] = filtered_subfolder
+            else:
+                # Include files and leaf nodes
+                filtered[key] = value
+                
+        return filtered
+    
+    # Create a new repo_dict with filtered structure
+    filtered_repo_dict = repo_dict.copy()
+    if 'structure' in repo_dict:
+        filtered_repo_dict['structure'] = filter_level(repo_dict['structure'])
+    
+    return filtered_repo_dict
+
+
+def tree_repo_dict(repo_dict: dict):
     def build_level(d, prefix=""):
         lines = []
         items = list(d.keys())
-        filtered_items = [key for key in items if key not in exclude_dirs and key.split(".")[-1] not in exclude_file_exts]
-        for i, key in enumerate(filtered_items):
-            is_last = i == len(filtered_items) - 1
+        
+        for i, key in enumerate(items):
+            is_last = i == len(items) - 1
             connector = "└── " if is_last else "|-- "
             lines.append(f"{prefix}{connector}{key}")
 
@@ -32,8 +71,8 @@ def tree_structure_from_pickle(repo_dict: dict, exclude_dirs: list, exclude_file
     all_lines = build_level(repo_dict['structure'])
     return ".\n" + "\n".join(all_lines)
 
-def extract_locations_from_patch(patch: str) -> List[str]:
-    """Extract file locations from git patch."""
+def extract_locations_from_patch(patch: str) -> List[Dict[str, any]]:
+    """Extract file locations from git patch and return as list of dictionaries with file_path, start_line, end_line, and raw format."""
     if not patch:
         return []
 
@@ -56,7 +95,13 @@ def extract_locations_from_patch(patch: str) -> List[str]:
         elif line.startswith("@@ "):
             # Finalize previous hunk
             if current_file and start_line is not None and end_line is not None:
-                locations.append(f"{current_file}:L{start_line}-L{end_line}")
+                raw_format = f"{current_file}:L{start_line}-L{end_line}"
+                locations.append({
+                    'file_path': current_file,
+                    'start_line': start_line,
+                    'end_line': end_line,
+                    'raw': raw_format
+                })
 
             hunk_match = re.match(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@", line)
             if hunk_match:
@@ -80,6 +125,12 @@ def extract_locations_from_patch(patch: str) -> List[str]:
 
     # Final hunk
     if current_file and start_line is not None and end_line is not None:
-        locations.append(f"{current_file}:L{start_line}-L{end_line}")
+        raw_format = f"{current_file}:L{start_line}-L{end_line}"
+        locations.append({
+            'file_path': current_file,
+            'start_line': start_line,
+            'end_line': end_line,
+            'raw': raw_format
+        })
 
     return locations

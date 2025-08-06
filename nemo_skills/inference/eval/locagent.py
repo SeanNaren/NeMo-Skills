@@ -23,7 +23,7 @@ import openai
 
 from nemo_skills.inference.eval.locagent_utils.dialog_processor import DialogProcessor
 from nemo_skills.inference.eval.locagent_utils.tool_executor import ToolExecutor
-from nemo_skills.inference.eval.locagent_utils.utils import tree_structure_from_pickle
+from nemo_skills.inference.eval.locagent_utils.utils import tree_repo_dict, filter_repo_dict
 from nemo_skills.inference.generate import GenerateSolutionsConfig, GenerationTask, InferenceConfig
 from nemo_skills.inference.model import server_params
 from nemo_skills.utils import get_help_message, get_logger_name, nested_dataclass, remove_thinking, setup_logging
@@ -46,7 +46,7 @@ class LocalAgentGenerationConfig(GenerateSolutionsConfig):
     total_steps: int = 5
 
     # CHANGED: Switched from set to list for OmegaConf compatibility
-    exclude_file_exts: list = field(default_factory=lambda: ["py"])
+    file_extensions: list = field(default_factory=lambda: ["py"])
 
     # CHANGED: Switched from set to list for OmegaConf compatibility
     exclude_dirs: list = field(default_factory=lambda: [
@@ -126,7 +126,7 @@ cs.store(name="base_locagent_generation_config", node=LocalAgentGenerationConfig
 class LocAgentGenerationTask(GenerationTask):
     def __init__(self, cfg: LocalAgentGenerationConfig):
         super().__init__(cfg)
-        self.tool_executor = ToolExecutor(cfg)
+        self.tool_executor = ToolExecutor()
 
     def log_example_prompt(self, data):
         return
@@ -143,7 +143,8 @@ class LocAgentGenerationTask(GenerationTask):
         # 'structure', 'instance_id'])
         with open(instance_filepath, 'rb') as f:
             repo_dict = pickle.load(f)
-        tree_structure = tree_structure_from_pickle(repo_dict, self.cfg.exclude_dirs, self.cfg.exclude_file_exts)
+        repo_dict = filter_repo_dict(repo_dict, self.cfg.exclude_dirs, self.cfg.file_extensions)
+        tree_structure = tree_repo_dict(repo_dict)
 
         inputs = f"""
 ### Problem Description
@@ -180,20 +181,20 @@ class LocAgentGenerationTask(GenerationTask):
             if not extracted_block:
                 LOG.warning("Model failed to generate a tool use or location. Ending generation.")
                 # todo (hov): add resampling with different temperature if necessary.
+                data_point["status"] = "failed"
                 break
-            if extracted_block["type"] == "locations":
-                break
-
+            
+            data_point['turns'][-1]['assistant'] = extracted_block
+            data_point['turns'][-1]['assistant_raw'] = llm_output['generation']
+            data_point['turns'][-1]['assistant_raw_w_think'] = llm_output['_full_generation']
             if extracted_block["type"] == "tool_calls":
-                print("extracted_block", extracted_block)
                 tool_call_result = self.tool_executor.execute_tool(extracted_block["tool_call"], repo_dict)
+                data_point['turns'].append({"inputs": tool_call_result})
+            elif extracted_block["type"] == "locations":
+                data_point["locations"] = extracted_block["locations"]
+                data_point["status"] = "success"
+                break
 
-                data_point['turns'][-1]['assistant'] = extracted_block
-                data_point['turns'].append(
-                    {
-                        "inputs": tool_call_result,
-                    }
-                )
             print("Current messages", data_point['turns'])
 
         # generation is a dict["problem_id.subtask_step": full_solution] here
@@ -205,7 +206,7 @@ class LocAgentGenerationTask(GenerationTask):
             Assistant: {“generation”: … “location”: …}
         ]
         """
-        return {'generation': chat_history, 'num_generated_tokens': total_generated_tokens}
+        return {'generation': chat_history, 'total_generated_tokens': total_generated_tokens, 'num_turns': len(chat_history)}
 
 
 GENERATION_TASK_CLASS = LocAgentGenerationTask

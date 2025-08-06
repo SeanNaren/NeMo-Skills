@@ -1,6 +1,7 @@
 import os
 import logging
 from nemo_skills.utils import get_logger_name
+from nemo_skills.inference.eval.locagent_utils.utils import tree_repo_dict
 
 LOG = logging.getLogger(get_logger_name(__file__))
 
@@ -8,8 +9,8 @@ LOG = logging.getLogger(get_logger_name(__file__))
 class ToolExecutor:
     """Handles tool execution for the assistant against a nested dictionary representation of a repository."""
 
-    def __init__(self, cfg):
-        self.cfg = cfg
+    def __init__(self):
+        pass
 
     def execute_tool(self, extracted_block: dict, repo_dict: dict) -> str:
         """Execute a tool call and return the result."""
@@ -99,46 +100,11 @@ class ToolExecutor:
 
     def _execute_repo_tree_tool(self, repo_dict: dict) -> str:
         """Generates a tree view of the repository from the nested dictionary."""
-        result = ["repository/"]
-
-        def add_to_tree(current_dict: dict, prefix: str = ""):
-            items = []
-            for name, node in current_dict.items():
-                if self._is_dir_node(node):
-                    items.append((name, True))  # (name, is_dir)
-                elif self._is_file_node(node):
-                    file_ext = os.path.splitext(name)[1].lstrip(".")
-                    if file_ext in self.cfg.allowed_exts or name in self.cfg.allowed_exts:
-                        items.append((name, False))  # (name, is_file)
-
-            items.sort(key=lambda x: (not x[1], x[0].lower()))  # Dirs first, then alphabetical
-
-            for i, (name, is_dir) in enumerate(items):
-                if name.startswith(".") or name in ["__pycache__", ".git"]:
-                    continue
-                if is_dir and name.lower() in self.cfg.exclude_dirs:
-                    continue
-
-                is_last = i == len(items) - 1
-                connector = '└── ' if is_last else '├── '
-
-                if is_dir:
-                    result.append(f"{prefix}{connector}{name}/")
-                    new_prefix = prefix + ("    " if is_last else "│   ")
-                    add_to_tree(current_dict[name], new_prefix)
-                else:  # is_file
-                    if self.cfg.show_line_counts:
-                        line_count = len(current_dict[name]['text'])
-                        result.append(f"{prefix}{connector}{name} ({line_count} lines)")
-                    else:
-                        result.append(f"{prefix}{connector}{name}")
-
         try:
-            add_to_tree(repo_dict)
-            return "\n".join(result)
+            return tree_repo_dict(repo_dict)
         except Exception as e:
-            LOG.error(f"Error generating repo tree: {str(e)}")
-            return f"Error generating repo tree: {str(e)}"
+            LOG.error(f"Error executing repo_tree tool: {str(e)}")
+            return f"Error executing repo_tree tool: {str(e)}"
 
     def _execute_codebase_search_tool(self, extracted_block: dict, repo_dict: dict) -> str:
         """Executes a codebase search on the nested dictionary, showing context around matches."""
@@ -157,13 +123,9 @@ class ToolExecutor:
                     new_path = f"{current_path}/{name}" if current_path else name
 
                     if self._is_dir_node(node):
-                        if name.lower() not in self.cfg.exclude_dirs:
-                            search_recursive(node, new_path)
+                        search_recursive(node, new_path)
 
                     elif self._is_file_node(node):
-                        if os.path.splitext(name)[1] not in self.cfg.file_extensions:
-                            continue
-
                         lines = node["text"]
                         # Find all lines containing the query (using 0-based indexing)
                         match_indices = [i for i, line in enumerate(lines) if query_lower in line.lower()]
@@ -223,6 +185,7 @@ class ToolExecutor:
 
             # Sort results by match count (descending), then by file path (ascending)
             results.sort()
+            results = results[:5]
 
             # Extract just the formatted string part for the final output
             final_results = [res[1] for res in results]
