@@ -11,7 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-
+import asyncio
 import logging
 import re
 import sys
@@ -50,6 +50,7 @@ class IOIExecutionConfig(GenerateSolutionsConfig):
     improve_prompt_config: str = "eval/ioi/codegen_improve"
     language: str = "python"
     total_steps: int = 5
+    num_test_generations: int = 5
 
 
 cs = hydra.core.config_store.ConfigStore.instance()
@@ -100,21 +101,36 @@ class IOIExecutionGenerationTask(GenerationTask):
             print(f"{cur_step}/{total_steps}: successfully generated solution.")
             # generate test inputs
             data_point['solution'] = f"```{self.cfg.language}\n{cur_solution}```"
-            test_llm_output = await super().process_single_datapoint(data_point, all_data, prompt=self.test_prompt)
 
-            test_inputs = extract_test_input(test_llm_output["generation"])
-            if not test_inputs:
+            start_tests = time.time()
+            tasks = [
+                super().process_single_datapoint(data_point, all_data, prompt=self.test_prompt)
+                for _ in range(self.cfg.num_test_generations)
+            ]
+            all_results = await asyncio.gather(*tasks)
+            print(f'time taken for test generation {time.time() - start_tests}s')
+
+            test_input = next(
+                (
+                    extracted for result in all_results
+                    if (extracted := extract_test_input(result["generation"]))
+                ),
+                None
+            )
+
+            if test_input is None:
                 raise ValueError(
-                    f"Failed to generate a test input, received: {test_llm_output}"
+                    f"Failed to extract a valid test input from {len(all_results)} attempts. Received results: {all_results}"
                 )
+
             print(f"{cur_step}/{total_steps}: successfully generated tests.")
 
             output, _ = self.sandbox.execute_code(
                 generated_code=cur_solution,
-                std_input=test_inputs,
+                std_input=test_input,
                 language=self.cfg.language
             )
-            data_point['inputs'] = f"```inputs\n{test_inputs}\n```"
+            data_point['inputs'] = f"```inputs\n{test_input}\n```"
             data_point['outputs'] = format_code_output(
                 output,
                 code_output_begin=self.prompt.config.code_tags.code_output_begin,
@@ -132,7 +148,7 @@ class IOIExecutionGenerationTask(GenerationTask):
                         "LocAgent generation failed due to running out of context. " "Failing for subsequent subtasks automatically.",
                     )
                 raise e
-            chat_history.append([test_llm_output, llm_output])
+            chat_history.append([all_results, llm_output])
             print(f"Time taken for step {time.time() - start_iter}s")
 
         print(f"Time taken for generation {time.time() - start}s")
