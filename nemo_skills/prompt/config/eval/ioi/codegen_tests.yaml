@@ -9,9 +9,9 @@ user: |-
   
   The script will be executed without any inputs, so make sure to script is standalone, testing the functionality of the solution.
   
-  You must use ```cpp for just to wrap the executable script with the following format:
+  You must use ```script to wrap the executable script with the following format:
   ```cpp
-  // Your code here
+  // Your executable c++ script here.
   ```
   
   ## Problem

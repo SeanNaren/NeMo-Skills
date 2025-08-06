@@ -65,7 +65,7 @@ def extract_code_block(text: str):
 
 
 def extract_test_input(text: str):
-    matches = re.findall(r"```cpp(.*?)```", text, re.DOTALL)
+    matches = re.findall(r"```script(.*?)```", text, re.DOTALL)
     return matches[-1].strip() if matches else None
 
 
