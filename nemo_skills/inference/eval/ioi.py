@@ -125,6 +125,8 @@ class IOIExecutionGenerationTask(GenerationTask):
         all_results = await asyncio.gather(*tasks)
         print(f'time taken for test generation {time.time() - start_tests}s')
 
+        print(all_results)
+
         test_script = next(
             (
                 extracted for result in all_results
