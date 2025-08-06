@@ -59,8 +59,8 @@ async def compile_and_run_cpp(code_string: str):
             raise RuntimeError("Execution failed: Compiled executable not found.")
 
 
-def extract_code_block(text: str, language: str = "python"):
-    matches = re.findall(rf"```{language}(.*?)```", text, re.DOTALL)
+def extract_code_block(text: str):
+    matches = re.findall(r"```cpp(.*?)```", text, re.DOTALL)
     return matches[-1].strip() if matches else None
 
 
