@@ -119,7 +119,7 @@ class IOIExecutionGenerationTask(GenerationTask):
 
         start_tests = time.time()
         tasks = [
-            super().process_single_datapoint(data_point, all_data, prompt=self.test_prompt)
+            GenerationTask.process_single_datapoint(self, data_point, all_data, prompt=self.test_prompt)
             for _ in range(self.cfg.num_test_generations)
         ]
         all_results = await asyncio.gather(*tasks)
