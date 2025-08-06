@@ -75,7 +75,7 @@ class IOIExecutionConfig(GenerateSolutionsConfig):
     server: dict = field(default_factory=dict)
     prompt_config: str = "eval/ioi/codegen"
     test_prompt_config: str = "eval/ioi/codegen_tests"
-    language: str = "python"
+    language: str = "cpp"
     total_steps: int = 5
     num_test_generations: int = 5
 
