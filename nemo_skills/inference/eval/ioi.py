@@ -75,7 +75,6 @@ class IOIExecutionConfig(GenerateSolutionsConfig):
     server: dict = field(default_factory=dict)
     prompt_config: str = "eval/ioi/codegen"
     test_prompt_config: str = "eval/ioi/codegen_tests"
-    improve_prompt_config: str = "eval/ioi/codegen_improve"
     language: str = "python"
     total_steps: int = 5
     num_test_generations: int = 5
@@ -88,12 +87,6 @@ cs.store(name="base_ioi_generation_config", node=IOIExecutionConfig)
 class IOIExecutionGenerationTask(GenerationTask):
     def __init__(self, cfg: IOIExecutionConfig):
         super().__init__(cfg)
-        self.improve_prompt = get_prompt(
-            self.cfg.improve_prompt_config,
-            self.cfg.prompt_template,
-            self.cfg.code_tags,
-            examples_type=self.cfg.examples_type
-        )
         self.test_prompt = get_prompt(
             self.cfg.test_prompt_config,
             self.cfg.prompt_template,
