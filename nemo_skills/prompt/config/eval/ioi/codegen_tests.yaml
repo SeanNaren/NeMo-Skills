@@ -3,73 +3,21 @@
 system: ""
 
 user: |-
-  You are a competitive programmer. Please generate a inputs that can be used to test the code for correctness (edge cases/time complexity/memory complexity etc).
-
-  The solution should be in the following format:
-  ```inputs
-  # Your test input here. It should be something that can be passed to the code directly.
-  ```
+  You are a competitive programmer. 
   
-  Here is an example:
+  You are given a competitive programming problem and a candidate solution. You are required to create an executable c++ script, that will be compiled and run. It must takes the solution and test it for correctness. Please embed the solution into this script.
+  
+  The script will be executed without any inputs, so make sure to script is standalone, testing the functionality of the solution.
+  
+  You must use ```cpp for just to wrap the executable script with the following format:
+  ```cpp
+  // Your code here
+  ```
   
   ## Problem
-  
-  Write a Python script that finds the largest number from a series of numbers provided via standard input.
-
-  The input will be a stream of integers, each on a new line. Your script should read all numbers until the stream ends and then print the single largest value to standard output.
-  
-  For example:
-  
-  Input:
-  1
-  8
-  3
-  4
-  
-  Output:
-  8
-  
-  Please write the complete script to solve this.
-  
-  ## Proposed Solution
-
-  ```python
-  # Your code here
-  import sys
-  
-  # Read all lines from stdin and convert them to a list of integers.
-  # This handles reading until the input stream is closed.
-  try:
-      numbers = [int(line.strip()) for line in sys.stdin if line.strip()]
-  
-      # Find the maximum value and print it, only if the list is not empty.
-      if numbers:
-          print(max(numbers))
-  except (ValueError, IndexError):
-      # Fails silently on bad input.
-      pass
-  ```
-  
-  ## Test Case
-  
-  Let's come up with a new set of test cases where there are duplicate max numbers.
-  
-  ```inputs
-  5
-  2
-  9
-  1
-  5
-  ```
-  
-  Here is the actual problem for which you need to generate test inputs:
-
-  ## Problem
-
   {question}
   
-  ## Proposed Solution
-
+  ## Candidate Solution
   {solution}
   
-  ## Test Case
+  ## Test Script

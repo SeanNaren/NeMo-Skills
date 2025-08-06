@@ -13,15 +13,15 @@
 # limitations under the License.
 import asyncio
 import logging
+import os
 import re
 import sys
+import tempfile
 import time
 from dataclasses import field
 
 import hydra
-import openai
 
-from nemo_skills.code_execution import format_code_output
 from nemo_skills.code_execution.sandbox import LocalSandbox
 from nemo_skills.inference.generate import GenerateSolutionsConfig, GenerationTask, InferenceConfig
 from nemo_skills.inference.model import server_params
@@ -31,13 +31,41 @@ from nemo_skills.utils import get_help_message, get_logger_name, nested_dataclas
 LOG = logging.getLogger(get_logger_name(__file__))
 
 
+async def compile_and_run_cpp(code_string: str):
+    with tempfile.TemporaryDirectory() as temp_dir:
+        executable_path = os.path.join(temp_dir, "a.out")
+        compile_command = ["g++", "-x", "c++", "-o", executable_path, "-"]
+
+        compiler_process = await asyncio.create_subprocess_exec(
+            *compile_command,
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        _, compile_stderr_bytes = await compiler_process.communicate(input=code_string.encode())
+
+        if compiler_process.returncode != 0:
+            raise RuntimeError(f"C++ compilation failed:\n{compile_stderr_bytes.decode()}")
+
+        try:
+            run_process = await asyncio.create_subprocess_exec(
+                executable_path,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            run_stdout_bytes, run_stderr_bytes = await run_process.communicate()
+            return run_stdout_bytes.decode(), run_stderr_bytes.decode()
+        except FileNotFoundError:
+            raise RuntimeError("Execution failed: Compiled executable not found.")
+
+
 def extract_code_block(text: str, language: str = "python"):
     matches = re.findall(rf"```{language}(.*?)```", text, re.DOTALL)
     return matches[-1].strip() if matches else None
 
 
 def extract_test_input(text: str):
-    matches = re.findall(r"```inputs(.*?)```", text, re.DOTALL)
+    matches = re.findall(r"```cpp(.*?)```", text, re.DOTALL)
     return matches[-1].strip() if matches else None
 
 
@@ -80,79 +108,52 @@ class IOIExecutionGenerationTask(GenerationTask):
 
     async def process_single_datapoint(self, data_point, all_data, prompt=None):
         """Will do all necessary generations to get a single answer for the data point."""
-        total_steps = self.cfg.total_steps
         chat_history = []
 
         # generate an initial solution
         llm_output = await super().process_single_datapoint(data_point, all_data, prompt=self.prompt)
+        cur_solution = extract_code_block(llm_output['generation'])
+
+        if not cur_solution:
+            raise ValueError(
+                f"Failed to generate a solution, received {llm_output}"
+            )
 
         chat_history.append(llm_output)
-        start = time.time()
-        # run execution/improve steps
-        for cur_step in range(total_steps):
-            start_iter = time.time()
 
-            cur_solution = extract_code_block(llm_output['generation'])
+        # generate test inputs
+        data_point['solution'] = f"```{self.cfg.language}\n{cur_solution}```"
 
-            if not cur_solution:
-                raise ValueError(
-                    f"Failed to generate a solution, received {llm_output}"
-                )
-            print(f"{cur_step}/{total_steps}: successfully generated solution.")
-            # generate test inputs
-            data_point['solution'] = f"```{self.cfg.language}\n{cur_solution}```"
+        start_tests = time.time()
+        tasks = [
+            super().process_single_datapoint(data_point, all_data, prompt=self.test_prompt)
+            for _ in range(self.cfg.num_test_generations)
+        ]
+        all_results = await asyncio.gather(*tasks)
+        print(f'time taken for test generation {time.time() - start_tests}s')
 
-            start_tests = time.time()
-            tasks = [
-                super().process_single_datapoint(data_point, all_data, prompt=self.test_prompt)
-                for _ in range(self.cfg.num_test_generations)
-            ]
-            all_results = await asyncio.gather(*tasks)
-            print(f'time taken for test generation {time.time() - start_tests}s')
+        test_script = next(
+            (
+                extracted for result in all_results
+                if (extracted := extract_test_input(result["generation"]))
+            ),
+            None
+        )
 
-            test_input = next(
-                (
-                    extracted for result in all_results
-                    if (extracted := extract_test_input(result["generation"]))
-                ),
-                None
+        if test_script is None:
+            raise ValueError(
+                f"Failed to extract a valid test input from {len(all_results)} attempts. Received results: {all_results}"
             )
+        print("SOLUTION", cur_solution)
+        print("TEST INPUT", test_script)
 
-            if test_input is None:
-                raise ValueError(
-                    f"Failed to extract a valid test input from {len(all_results)} attempts. Received results: {all_results}"
-                )
+        std_output, std_err = await compile_and_run_cpp(test_script)
 
-            print(f"{cur_step}/{total_steps}: successfully generated tests.")
+        print("OUTPUT FROM EXECUTION", std_output, std_err)
+        raise ValueError
 
-            output, _ = self.sandbox.execute_code(
-                generated_code=cur_solution,
-                std_input=test_input,
-                language=self.cfg.language
-            )
-            data_point['inputs'] = f"```inputs\n{test_input}\n```"
-            data_point['outputs'] = format_code_output(
-                output,
-                code_output_begin=self.prompt.config.code_tags.code_output_begin,
-                code_output_end=self.prompt.config.code_tags.code_output_end,
-                code_output_format=self.prompt.config.code_tags.code_output_format
-            )
-            print(f"{cur_step}/{total_steps}: successfully executed std inputs.")
-            try:
-                llm_output = await super().process_single_datapoint(data_point, all_data, prompt=self.improve_prompt)
-            # TODO: this is a hack (as not all servers return that),
-            # but eventually we should support handling errors like this globally for all generations
-            except openai.BadRequestError as e:
-                if 'Please reduce the length of the messages or completion' in str(e):
-                    LOG.warning(
-                        "LocAgent generation failed due to running out of context. " "Failing for subsequent subtasks automatically.",
-                    )
-                raise e
-            chat_history.append([all_results, llm_output])
-            print(f"Time taken for step {time.time() - start_iter}s")
-
-        print(f"Time taken for generation {time.time() - start}s")
         code_block = extract_code_block(llm_output["generation"], self.cfg.language)
+
         return {'generation': code_block, 'steps': chat_history}
 
 
