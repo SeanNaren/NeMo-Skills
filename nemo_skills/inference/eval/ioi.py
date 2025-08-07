@@ -74,7 +74,9 @@ class IOIExecutionConfig(GenerateSolutionsConfig):
     inference: InferenceConfig = field(default_factory=InferenceConfig)  # LLM call parameters
     server: dict = field(default_factory=dict)
     prompt_config: str = "eval/ioi/codegen"
+    improve_prompt_config: str = "eval/ioi/codegen_improve"
     test_prompt_config: str = "eval/ioi/codegen_tests"
+    improve_test_prompt_config: str = "eval/ioi/codegen_improve_test"
     language: str = "cpp"
     total_steps: int = 5
     num_test_generations: int = 5
@@ -89,6 +91,18 @@ class IOIExecutionGenerationTask(GenerationTask):
         super().__init__(cfg)
         self.test_prompt = get_prompt(
             self.cfg.test_prompt_config,
+            self.cfg.prompt_template,
+            self.cfg.code_tags,
+            examples_type=self.cfg.examples_type
+        )
+        self.improve_prompt = get_prompt(
+            self.cfg.improve_prompt_config,
+            self.cfg.prompt_template,
+            self.cfg.code_tags,
+            examples_type=self.cfg.examples_type
+        )
+        self.improve_test_prompt = get_prompt(
+            self.cfg.improve_test_prompt_config,
             self.cfg.prompt_template,
             self.cfg.code_tags,
             examples_type=self.cfg.examples_type
@@ -139,17 +153,43 @@ class IOIExecutionGenerationTask(GenerationTask):
             raise ValueError(
                 f"Failed to extract a valid test input from {len(all_results)} attempts. Received results: {all_results}"
             )
-        print("SOLUTION", cur_solution)
-        print("TEST INPUT", test_script)
 
         std_output, std_err = await compile_and_run_cpp(test_script)
 
-        print("OUTPUT FROM EXECUTION", std_output, std_err)
-        raise ValueError
+        output = std_output + std_err
 
-        code_block = extract_code_block(llm_output["generation"], self.cfg.language)
+        for x in range(self.cfg.total_steps):
 
-        return {'generation': code_block, 'steps': chat_history}
+            data_point['output'] = output
+            data_point['script'] = test_script
+            data_point['solution'] = cur_solution
+
+            improve_sol_output = super().process_single_datapoint(data_point, all_data, prompt=self.improve_prompt)
+            improve_script_output = super().process_single_datapoint(data_point, all_data, prompt=self.improve_test_prompt)
+
+            improve_sol_output, improve_script_output = await asyncio.gather(improve_sol_output, improve_script_output)
+
+            cur_solution = extract_code_block(improve_sol_output['generation'])
+
+            if not cur_solution:
+                raise ValueError(
+                    f"Failed to generate a solution, received {llm_output}"
+                )
+
+            test_script = extract_test_input(improve_script_output['generation'])
+
+            if test_script is None:
+                raise ValueError(
+                    f"Failed to extract a valid test input from {len(all_results)} attempts. Received results: {all_results}"
+                )
+
+            std_output, std_err = await compile_and_run_cpp(test_script)
+
+            output = std_output + std_err
+
+            chat_history.append([improve_sol_output, improve_script_output, output])
+
+        return {'generation': cur_solution, 'steps': chat_history}
 
 
 GENERATION_TASK_CLASS = IOIExecutionGenerationTask
