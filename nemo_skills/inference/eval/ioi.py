@@ -115,7 +115,7 @@ class IOIExecutionGenerationTask(GenerationTask):
         chat_history.append(llm_output)
 
         # generate test inputs
-        data_point['solution'] = f"```{self.cfg.language}\n{cur_solution}```"
+        data_point['solution'] = cur_solution
 
         start_tests = time.time()
         tasks = [
