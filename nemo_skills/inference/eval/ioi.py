@@ -35,7 +35,7 @@ async def compile_and_run_cpp(code_string: str, data_point: dict):
         _, compile_stderr = await compiler_process.communicate(input=code_string.encode())
 
         if compiler_process.returncode != 0:
-            raise RuntimeError(f"C++ compilation failed:\n{compile_stderr.decode()}")
+            raise RuntimeError(f"C++ compilation failed:\n{compile_stderr.decode()}\nCode:{code_string}")
 
         run_process = await asyncio.create_subprocess_exec(
             executable_path, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
@@ -95,6 +95,29 @@ class IOIExecutionGenerationTask(GenerationTask):
             {**data_point, **extra_data}, all_data, prompt=self.prompts[prompt_key]
         )
 
+    async def _find_successful_script(self, test_responses, data_point):
+        first_error = None
+        for r in test_responses:
+            script = extract_test_input(r['generation'])
+            if not script:
+                continue
+            try:
+                _, stderr = await compile_and_run_cpp(script, data_point)
+                if not stderr:
+                    return r, script
+                if first_error is None:
+                    first_error = (f"Runtime stderr:\n{stderr}", script)
+            except RuntimeError as e:
+                if first_error is None:
+                    first_error = (str(e), script)
+
+        if first_error:
+            error_msg, failed_script = first_error
+            raise ValueError(
+                f"All test scripts failed. First error:\n{error_msg}\nFailed script:\n{failed_script}"
+            )
+        raise ValueError(f"Failed to extract a valid test script from {len(test_responses)} attempts.")
+
     async def process_single_datapoint(self, data_point, all_data, prompt=None):
         chat_history = []
 
@@ -109,9 +132,7 @@ class IOIExecutionGenerationTask(GenerationTask):
             for _ in range(self.cfg.num_test_generations)
         ]
         test_responses = await asyncio.gather(*test_gen_tasks)
-        test_script = next((s for r in test_responses if (s := extract_test_input(r['generation']))), None)
-        if not test_script:
-            raise ValueError(f"Failed to extract a valid test script from {len(test_responses)} attempts.")
+        _, test_script = await self._find_successful_script(test_responses, data_point)
 
         for _ in range(self.cfg.total_steps):
             stdout, stderr = await compile_and_run_cpp(test_script, data_point)
@@ -119,36 +140,25 @@ class IOIExecutionGenerationTask(GenerationTask):
 
             common_args = {"solution": solution, "script": test_script, "output": output}
 
-            # Keep a single task for solution improvement
             improve_sol_task = self._call_llm(data_point, all_data, "improve_solution", **common_args)
-
-            # Create multiple tasks for script improvement
             improve_script_tasks = [
                 self._call_llm(data_point, all_data, "improve_test", **common_args)
                 for _ in range(self.cfg.num_test_generations)
             ]
 
-            # Await the solution task and all script tasks in parallel
             sol_resp, *script_resps = await asyncio.gather(improve_sol_task, *improve_script_tasks)
 
             new_solution = extract_code_block(sol_resp['generation'])
             if not new_solution:
                 raise ValueError(f"Failed to extract improved solution. Response: {sol_resp}")
 
-            # Find the first valid script and its corresponding response from all attempts
-            successful_extraction = next(
-                ((resp, script) for resp in script_resps if (script := extract_test_input(resp['generation']))),
-                (None, None)
-            )
-            script_resp, new_script = successful_extraction
-
-            if not new_script:
-                raise ValueError(f"Failed to extract a valid improved test script from {len(script_resps)} attempts.")
+            script_resp, new_script = await self._find_successful_script(script_resps, data_point)
 
             solution, test_script = new_solution, new_script
             chat_history.append([sol_resp, script_resp, output])
 
         return {'generation': solution, 'steps': chat_history}
+
 
 GENERATION_TASK_CLASS = IOIExecutionGenerationTask
 
