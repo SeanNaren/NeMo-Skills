@@ -50,73 +50,75 @@ class LocalAgentGenerationConfig(GenerateSolutionsConfig):
     file_extensions: list = field(default_factory=lambda: ["py"])
 
     # CHANGED: Switched from set to list for OmegaConf compatibility
-    exclude_dirs: list = field(default_factory=lambda: [
-        "test",
-        "tests",
-        "testing",
-        "test_",
-        "_test",
-        "__pycache__",
-        ".git",
-        ".github",
-        "docs",
-        "examples",
-        "scripts",
-        "tools",
-        "utils",
-        "migrations",
-        "venv",
-        "env",
-        "node_modules",
-        "dist",
-        "build",
-        "target",
-        "bin",
-        "obj",
-        "coverage",
-        ".pytest_cache",
-        ".tox",
-        ".mypy_cache",
-        "locale",
-        "translations",
-        "i18n",
-        "l10n",
-        "static",
-        "assets",
-        "media",
-        "uploads",
-        "logs",
-        "tmp",
-        "temp",
-        "cache",
-        "vendor",
-        "lib",
-        "libs",
-        "dependencies",
-        "config",
-        "conf",
-        "settings",
-        "local_settings",
-        "fixtures",
-        "data",
-        "datasets",
-        "notebooks",
-        "jupyter",
-        "ipynb_checkpoints",
-        "deploy",
-        "deployment",
-        "docker",
-        "kubernetes",
-        "ci",
-        "cd",
-        "github",
-        "gitlab",
-        "bitbucket",
-        "readme",
-        "license",
-        "changelog",
-        "contributing",
-    ])
+    exclude_dirs: list = field(
+        default_factory=lambda: [
+            "test",
+            "tests",
+            "testing",
+            "test_",
+            "_test",
+            "__pycache__",
+            ".git",
+            ".github",
+            "docs",
+            "examples",
+            "scripts",
+            "tools",
+            "utils",
+            "migrations",
+            "venv",
+            "env",
+            "node_modules",
+            "dist",
+            "build",
+            "target",
+            "bin",
+            "obj",
+            "coverage",
+            ".pytest_cache",
+            ".tox",
+            ".mypy_cache",
+            "locale",
+            "translations",
+            "i18n",
+            "l10n",
+            "static",
+            "assets",
+            "media",
+            "uploads",
+            "logs",
+            "tmp",
+            "temp",
+            "cache",
+            "vendor",
+            "lib",
+            "libs",
+            "dependencies",
+            "config",
+            "conf",
+            "settings",
+            "local_settings",
+            "fixtures",
+            "data",
+            "datasets",
+            "notebooks",
+            "jupyter",
+            "ipynb_checkpoints",
+            "deploy",
+            "deployment",
+            "docker",
+            "kubernetes",
+            "ci",
+            "cd",
+            "github",
+            "gitlab",
+            "bitbucket",
+            "readme",
+            "license",
+            "changelog",
+            "contributing",
+        ]
+    )
     show_line_counts: bool = True
 
 
@@ -155,59 +157,85 @@ class LocAgentGenerationTask(GenerationTask):
 {tree_structure}
 """
 
-        data_point['turns'] = [
-            {"inputs": inputs}
-        ]
+        data_point['turns'] = [{"inputs": inputs}]
 
-        for cur_step in range(total_steps):
-            try:
-                llm_output = await super().process_single_datapoint(data_point, all_data)
-            # TODO: this is a hack (as not all servers return that),
-            # but eventually we should support handling errors like this globally for all generations
-            except openai.BadRequestError as e:
-                if 'Please reduce the length of the messages or completion' in str(e):
-                    LOG.warning(
-                        "LocAgent generation failed due to running out of context. " "Failing for subsequent subtasks automatically.",
-                    )
-                raise e
+        reason = None
+        status = None
+        try:
+            for cur_step in range(total_steps):
+                try:
+                    llm_output = await super().process_single_datapoint(data_point, all_data)
+                # TODO: this is a hack (as not all servers return that),
+                # but eventually we should support handling errors like this globally for all generations
+                except openai.BadRequestError as e:
+                    if 'Please reduce the length of the messages or completion' in str(e):
+                        LOG.warning(
+                            "LocAgent generation failed due to running out of context. " "Failing for subsequent subtasks automatically.",
+                        )
+                        status = "failed"
+                        reason = "context_length_exceeded"
+                        break
+                    # For any other BadRequestError, also fail gracefully and store the error
+                    LOG.warning(f"LocAgent generation failed with BadRequestError: {e}")
+                    status = "failed"
+                    reason = f"bad_request_error: {str(e)}"
+                    break
 
-            total_generated_tokens += llm_output.get('num_generated_tokens', 0)
+                total_generated_tokens += llm_output.get('num_generated_tokens', 0)
 
-            chat_history.append(llm_output)
+                chat_history.append(llm_output)
 
-            if self.cfg.remove_thinking:
-                remove_thinking(llm_output, 'generation', self.cfg.thinking_begin, self.cfg.thinking_end)
-            extracted_block = DialogProcessor.extract_response(llm_output['generation'])
+                if self.cfg.remove_thinking:
+                    remove_thinking(llm_output, 'generation', self.cfg.thinking_begin, self.cfg.thinking_end)
+                extracted_block = DialogProcessor.extract_response(llm_output['generation'])
 
-            if not extracted_block:
-                LOG.warning("Model failed to generate a tool use or location. Ending generation.")
-                # todo (hov): add resampling with different temperature if necessary.
-                data_point["status"] = "failed"
-                break
-            
-            data_point['turns'][-1]['assistant'] = extracted_block
-            data_point['turns'][-1]['assistant_raw'] = llm_output['generation']
-            data_point['turns'][-1]['assistant_raw_w_think'] = llm_output['_full_generation']
-            if extracted_block["type"] == "tool_calls":
-                tool_call_result = self.tool_executor.execute_tool(extracted_block["tool_call"], repo_dict)
-                data_point['turns'].append({"inputs": tool_call_result})
-            elif extracted_block["type"] == "locations":
-                data_point["locations"] = extracted_block["locations"]
-                data_point["status"] = "success"
-                break
+                if not extracted_block:
+                    LOG.warning("Model failed to generate a tool use or location. Ending generation.")
+                    # todo (hov): add resampling with different temperature if necessary.
+                    status = "failed"
+                    reason = "no_tool_or_location_generated"
+                    break
 
-            print("Current messages", data_point['turns'])
+                data_point['turns'][-1]['assistant'] = extracted_block
+                data_point['turns'][-1]['assistant_raw'] = llm_output['generation']
+                data_point['turns'][-1]['assistant_raw_w_think'] = llm_output['_full_generation']
+                if extracted_block["type"] == "tool_calls":
+                    tool_call_result = self.tool_executor.execute_tool(extracted_block["tool_call"], repo_dict)
+                    data_point['turns'].append({"inputs": tool_call_result})
+                elif extracted_block["type"] == "locations":
+                    data_point["locations"] = extracted_block["locations"]
+                    status = "success"
+                    reason = None
+                    break
+
+                print("Current messages", data_point['turns'])
+
+            if status is None:
+                # If we exit the loop without setting status, treat as failed
+                status = "failed"
+                if reason is None:
+                    reason = "unknown_failure"
+        except Exception as e:
+            LOG.error(f"Unexpected error in process_single_datapoint: {e}")
+            status = "failed"
+            reason = f"exception: {str(e)}"
 
         # generation is a dict["problem_id.subtask_step": full_solution] here
-        """
-        [
-            User: Problem statement,
-            Assistant: {“generation”: generation with reasoning trace, “tool_call”: … },
-            User: {“tool_output”: “”},
-            Assistant: {“generation”: … “location”: …}
-        ]
-        """
-        return {'generation': chat_history, 'total_generated_tokens': total_generated_tokens, 'num_turns': len(chat_history)}
+        # """
+        # [
+        #     User: Problem statement,
+        #     Assistant: {“generation”: generation with reasoning trace, “tool_call”: … },
+        #     User: {“tool_output”: “”},
+        #     Assistant: {“generation”: … “location”: …}
+        # ]
+        # """
+        return {
+            'generation': chat_history,
+            'total_generated_tokens': total_generated_tokens,
+            'num_turns': len(chat_history),
+            'status': status,
+            'reason': reason,
+        }
 
 
 GENERATION_TASK_CLASS = LocAgentGenerationTask
