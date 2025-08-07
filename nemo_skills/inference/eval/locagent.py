@@ -15,6 +15,7 @@
 import logging
 import pickle
 import sys
+from pathlib import Path
 from copy import deepcopy
 from dataclasses import field
 
@@ -137,7 +138,7 @@ class LocAgentGenerationTask(GenerationTask):
         chat_history = []
 
         total_generated_tokens = 0
-        instance_filepath = f"{self.cfg.mount_directory}/{data_point['instance_id']}.pkl"
+        instance_filepath = Path(self.cfg.mount_directory).joinpath(f"{data_point['instance_id']}.pkl")
 
         # repo_dict is dict with 'structure' containing the actual repo tree dict_keys(['repo', 'base_commit',
         # 'structure', 'instance_id'])
