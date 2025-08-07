@@ -17,10 +17,17 @@ from nemo_skills.utils import get_help_message, get_logger_name, nested_dataclas
 LOG = logging.getLogger(get_logger_name(__file__))
 
 
-async def compile_and_run_cpp(code_string: str):
+async def compile_and_run_cpp(code_string: str, data_point: dict):
     with tempfile.TemporaryDirectory() as temp_dir:
+        for original_path, content in data_point.get('grader_files', []):
+            filename = os.path.basename(original_path)
+            if 'checker' in filename or 'grader' in filename or not filename.endswith('.h'):
+                continue
+            with open(os.path.join(temp_dir, filename), 'w') as f:
+                f.write(content)
+
         executable_path = os.path.join(temp_dir, "a.out")
-        compile_command = ["g++", "-x", "c++", "-o", executable_path, "-"]
+        compile_command = ["g++", "-I", temp_dir, "-x", "c++", "-o", executable_path, "-"]
         compiler_process = await asyncio.create_subprocess_exec(
             *compile_command, stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE
@@ -107,7 +114,7 @@ class IOIExecutionGenerationTask(GenerationTask):
             raise ValueError(f"Failed to extract a valid test script from {len(test_responses)} attempts.")
 
         for _ in range(self.cfg.total_steps):
-            stdout, stderr = await compile_and_run_cpp(test_script)
+            stdout, stderr = await compile_and_run_cpp(test_script, data_point)
             output = stdout + stderr
 
             common_args = {"solution": solution, "script": test_script, "output": output}
