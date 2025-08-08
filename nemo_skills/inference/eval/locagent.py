@@ -198,7 +198,7 @@ class LocAgentGenerationTask(GenerationTask):
 
                 data_point['turns'][-1]['assistant'] = extracted_block
                 data_point['turns'][-1]['assistant_raw'] = llm_output['generation']
-                data_point['turns'][-1]['assistant_raw_w_think'] = llm_output['_full_generation']
+                data_point['turns'][-1]['assistant_raw_w_think'] = llm_output.get('_full_generation', llm_output['generation'])
                 if extracted_block["type"] == "tool_calls":
                     tool_call_result = self.tool_executor.execute_tool(extracted_block["tool_call"], repo_dict)
                     data_point['turns'].append({"inputs": tool_call_result})

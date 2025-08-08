@@ -51,9 +51,9 @@ def evaluate_file_level_accuracy(ground_truth_locations: List[Dict], predicted_l
     if not predicted_locations:
         return {"precision": 1.0, "recall": 0.0, "f1": 0.0, "exact_match": 0.0}
     
-    # Extract unique file paths
-    ground_truth_files = {loc['file_path'] for loc in ground_truth_locations}
-    predicted_files = {loc['file_path'] for loc in predicted_locations}
+    # Extract unique file paths (with defensive programming for missing file_path key)
+    ground_truth_files = {loc['file_path'] for loc in ground_truth_locations if 'file_path' in loc}
+    predicted_files = {loc['file_path'] for loc in predicted_locations if 'file_path' in loc}
     
     # Calculate metrics
     true_positives = len(ground_truth_files.intersection(predicted_files))
@@ -128,12 +128,16 @@ def evaluate_line_level_accuracy(ground_truth_locations: List[Dict], predicted_l
     pred_by_file = {}
     
     for loc in ground_truth_locations:
+        if 'file_path' not in loc:
+            continue  # Skip locations without file_path
         file_path = loc['file_path']
         if file_path not in gt_by_file:
             gt_by_file[file_path] = []
         gt_by_file[file_path].append(loc)
     
     for loc in predicted_locations:
+        if 'file_path' not in loc:
+            continue  # Skip locations without file_path
         file_path = loc['file_path']
         if file_path not in pred_by_file:
             pred_by_file[file_path] = []
@@ -230,8 +234,8 @@ def _execute_single_test(args):
         "line_level_overlap_75": line_level_metrics_75,
         "ground_truth_count": len(ground_truth_locations),
         "predicted_count": len(locations),
-        "ground_truth_files": list({loc['file_path'] for loc in ground_truth_locations}),
-        "predicted_files": list({loc['file_path'] for loc in locations})
+        "ground_truth_files": list({loc['file_path'] for loc in ground_truth_locations if 'file_path' in loc}),
+        "predicted_files": list({loc['file_path'] for loc in locations if 'file_path' in loc})
     }
     
     # Log detailed information for debugging
