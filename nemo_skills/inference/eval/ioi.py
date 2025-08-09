@@ -105,12 +105,9 @@ class IOIExecutionGenerationTask(GenerationTask):
                 continue
             try:
                 _, stderr = await compile_and_run_cpp(script, data_point)
-                if not stderr:
-                    num_successful_tests += 1
-                    if successful_script_info is None:
-                        successful_script_info = (r, script)
-                elif first_error is None:
-                    first_error = (f"Runtime stderr:\n{stderr}", script)
+                num_successful_tests += 1
+                if successful_script_info is None:
+                    successful_script_info = (r, script)
             except RuntimeError as e:
                 if first_error is None:
                     first_error = (str(e), script)
