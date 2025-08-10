@@ -128,17 +128,28 @@ class IOIExecutionGenerationTask(GenerationTask):
 
         solution_response = await self._call_llm(data_point, all_data, "initial")
         latest_generation_response = solution_response['generation']
-        solution = extract_code_block(latest_generation_response)
-        if not solution:
-            raise ValueError(f"Failed to generate an initial solution: {solution_response}")
         chat_history.append(solution_response)
+
+        try:
+            solution = extract_code_block(latest_generation_response)
+            if not solution:
+                raise ValueError(f"Failed to generate an initial solution: {solution_response}")
+        except Exception as e:
+            LOG.warning("Failed to extract valid code from initial generation: %s", e)
+            return {'generation': latest_generation_response, 'steps': chat_history,
+                    'num_steps_completed': num_steps_completed}
 
         test_gen_tasks = [
             self._call_llm(data_point, all_data, "test_generation", solution=solution)
             for _ in range(self.cfg.num_test_generations)
         ]
         test_responses = await asyncio.gather(*test_gen_tasks)
-        _, test_script, _ = await self._find_successful_script(test_responses, data_point)
+        try:
+            _, test_script, _ = await self._find_successful_script(test_responses, data_point)
+        except Exception as e:
+            LOG.warning("Failed to generate a successful test input initially: %s", e)
+            return {'generation': latest_generation_response, 'steps': chat_history,
+                    'num_steps_completed': num_steps_completed}
 
         try:
             for _ in range(self.cfg.total_steps):
