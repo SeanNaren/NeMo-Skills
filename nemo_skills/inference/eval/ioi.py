@@ -61,7 +61,8 @@ class IOIExecutionConfig(GenerateSolutionsConfig):
     prompt_config: str = "eval/ioi/codegen"
     improve_prompt_config: str = "eval/ioi/codegen_improve"
     test_prompt_config: str = "eval/ioi/codegen_tests"
-    improve_test_prompt_config: str = "eval/ioi/codegen_improve_test"
+    llm_select_test: bool = False
+    llm_select_test_config: str = "eval/ioi/codegen_select_test"
     language: str = "cpp"
     total_steps: int = 2
     num_test_generations: int = 5
@@ -83,7 +84,7 @@ class IOIExecutionGenerationTask(GenerationTask):
             "initial": get_prompt(cfg.prompt_config, **prompt_kwargs),
             "improve_solution": get_prompt(cfg.improve_prompt_config, **prompt_kwargs),
             "test_generation": get_prompt(cfg.test_prompt_config, **prompt_kwargs),
-            "improve_test": get_prompt(cfg.improve_test_prompt_config, **prompt_kwargs),
+            "select_test": get_prompt(cfg.llm_select_test_config, **prompt_kwargs),
         }
         self.sandbox = LocalSandbox()
 
@@ -95,32 +96,47 @@ class IOIExecutionGenerationTask(GenerationTask):
             {**data_point, **extra_data}, all_data, prompt=self.prompts[prompt_key]
         )
 
-    async def _find_successful_script(self, test_responses, data_point):
+    async def _find_successful_script(self, test_responses, data_point, all_data):
+        compiled = []
         first_error = None
-        successful_script_info = None
-        num_successful_tests = 0
         for r in test_responses:
             script = extract_test_input(r['generation'])
             if not script:
                 continue
             try:
-                _, stderr = await compile_and_run_cpp(script, data_point)
-                num_successful_tests += 1
-                if successful_script_info is None:
-                    successful_script_info = (r, script)
+                stdout, stderr = await compile_and_run_cpp(script, data_point)
+                compiled.append((r, script, stdout + stderr))
             except RuntimeError as e:
                 if first_error is None:
                     first_error = (str(e), script)
 
-        if successful_script_info:
-            return successful_script_info[0], successful_script_info[1], num_successful_tests
+        if not compiled:
+            if first_error:
+                error_msg, failed_script = first_error
+                raise ValueError(
+                    f"All test scripts failed. First error:\n{error_msg}\nFailed script:\n{failed_script}"
+                )
+            raise ValueError(f"Failed to extract a valid test script from {len(test_responses)} attempts.")
 
-        if first_error:
-            error_msg, failed_script = first_error
-            raise ValueError(
-                f"All test scripts failed. First error:\n{error_msg}\nFailed script:\n{failed_script}"
+        if self.cfg.llm_select_test and len(compiled) > 1:
+            parts = []
+            for idx, (_, script, output) in enumerate(compiled, 1):
+                parts.append(f"## Test script {idx}\n\n{script}\n\n## Output\n\n{output}\n")
+            test_scripts_text = "\n\n".join(parts)
+            select_resp = await self._call_llm(
+                data_point,
+                all_data,
+                "select_test",
+                test_scripts=test_scripts_text,
+                question=data_point.get('question', '')
             )
-        raise ValueError(f"Failed to extract a valid test script from {len(test_responses)} attempts.")
+            m = re.search(r"\\boxed\{(\d+)\}", select_resp['generation'])
+            if m:
+                idx = int(m.group(1))
+                if 1 <= idx <= len(compiled):
+                    return compiled[idx-1][0], compiled[idx-1][1], len(compiled)
+
+        return compiled[0][0], compiled[0][1], len(compiled)
 
     async def process_single_datapoint(self, data_point, all_data, prompt=None):
         chat_history = []
@@ -145,7 +161,7 @@ class IOIExecutionGenerationTask(GenerationTask):
         ]
         test_responses = await asyncio.gather(*test_gen_tasks)
         try:
-            _, test_script, _ = await self._find_successful_script(test_responses, data_point)
+            _, test_script, _ = await self._find_successful_script(test_responses, data_point, all_data)
         except Exception as e:
             LOG.warning("Failed to generate a successful test input initially: %s", e)
             return {'generation': latest_generation_response, 'steps': chat_history,
