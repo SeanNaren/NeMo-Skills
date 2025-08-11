@@ -61,7 +61,7 @@ class IOIExecutionConfig(GenerateSolutionsConfig):
     prompt_config: str = "eval/ioi/codegen"
     improve_prompt_config: str = "eval/ioi/codegen_improve"
     test_prompt_config: str = "eval/ioi/codegen_tests"
-    llm_select_test: bool = False
+    llm_select_test: bool = True
     llm_select_test_config: str = "eval/ioi/codegen_select_test"
     language: str = "cpp"
     total_steps: int = 2
