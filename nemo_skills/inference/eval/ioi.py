@@ -63,7 +63,7 @@ class IOIExecutionConfig(GenerateSolutionsConfig):
     test_prompt_config: str = "eval/ioi/codegen_tests"
     improve_test_prompt_config: str = "eval/ioi/codegen_improve_test"
     language: str = "cpp"
-    total_steps: int = 5
+    total_steps: int = 2
     num_test_generations: int = 5
 
 
@@ -156,27 +156,22 @@ class IOIExecutionGenerationTask(GenerationTask):
                 stdout, stderr = await compile_and_run_cpp(test_script, data_point)
                 output = stdout + stderr
 
-                common_args = {"solution": solution, "script": test_script, "output": output}
-
-                improve_sol_task = self._call_llm(data_point, all_data, "improve_solution", **common_args)
-                improve_script_tasks = [
-                    self._call_llm(data_point, all_data, "improve_test", **common_args)
-                    for _ in range(self.cfg.num_test_generations)
-                ]
-
-                sol_resp, *script_resps = await asyncio.gather(improve_sol_task, *improve_script_tasks)
+                sol_resp = await self._call_llm(
+                    data_point,
+                    all_data,
+                    "improve_solution",
+                    solution=solution,
+                    script=test_script,
+                    output=output,
+                )
 
                 new_solution = extract_code_block(sol_resp['generation'])
                 if not new_solution:
                     raise ValueError(f"Failed to extract improved solution. Response: {sol_resp}")
 
                 latest_generation_response = sol_resp['generation']
-
-                script_resp, new_script, num_successful_tests = await self._find_successful_script(script_resps,
-                                                                                                   data_point)
-
-                solution, test_script = new_solution, new_script
-                chat_history.append([sol_resp, script_resp, output, num_successful_tests])
+                solution = new_solution
+                chat_history.append(sol_resp)
                 num_steps_completed += 1
         except Exception:
             pass
