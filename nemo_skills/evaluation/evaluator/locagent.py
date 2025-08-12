@@ -232,10 +232,11 @@ def _execute_single_test(args):
         "line_level_overlap_50": line_level_metrics_50,
         "line_level_overlap_25": line_level_metrics_25,
         "line_level_overlap_75": line_level_metrics_75,
+        "ground_truth_locations": ground_truth_locations,
         "ground_truth_count": len(ground_truth_locations),
         "predicted_count": len(locations),
         "ground_truth_files": list({loc['file_path'] for loc in ground_truth_locations if 'file_path' in loc}),
-        "predicted_files": list({loc['file_path'] for loc in locations if 'file_path' in loc})
+        "predicted_files": list({loc['file_path'] for loc in locations if 'file_path' in loc}),
     }
     
     # Log detailed information for debugging

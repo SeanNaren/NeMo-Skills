@@ -41,13 +41,27 @@ tool_call_template = """
 class LocalAgentGenerationConfig(GenerateSolutionsConfig):
     inference: InferenceConfig = field(default_factory=InferenceConfig)  # LLM call parameters
     server: dict = field(default_factory=dict)
-    prompt_config: str = "eval/locagent/system"
     mount_directory: str = "/repos/"
     remove_thinking: bool = True
     total_steps: int = 5
 
     # CHANGED: Switched from set to list for OmegaConf compatibility
     file_extensions: list = field(default_factory=lambda: ["py"])
+    
+    # Whether to enable implicit tool call detection (fallback when no explicit tool calls found)
+    enable_implicit_tool_detection: bool = True
+    
+    # Common words to filter out when detecting implicit search queries
+    common_words_filter: list = field(
+        default_factory=lambda: [
+            "the", "and", "or", "but", "in", "on", "at", "to", "for", "of", "with", "by",
+            "is", "are", "was", "were", "be", "been", "have", "has", "had",
+            "do", "does", "did", "will", "would", "could", "should", "may", "might", "can",
+            "this", "that", "these", "those", "a", "an", "as", "if", "then", "else",
+            "when", "where", "why", "how", "what", "which", "who", "whom", "whose",
+            "need", "find", "search", "look", "function", "class", "method", "variable", "query"
+        ]
+    )
 
     # CHANGED: Switched from set to list for OmegaConf compatibility
     exclude_dirs: list = field(
@@ -187,7 +201,7 @@ class LocAgentGenerationTask(GenerationTask):
 
                 if self.cfg.remove_thinking:
                     remove_thinking(llm_output, 'generation', self.cfg.thinking_begin, self.cfg.thinking_end)
-                extracted_block = DialogProcessor.extract_response(llm_output['generation'])
+                extracted_block = DialogProcessor.extract_response(llm_output['generation'], self.cfg)
 
                 if not extracted_block:
                     LOG.warning("Model failed to generate a tool use or location. Ending generation.")

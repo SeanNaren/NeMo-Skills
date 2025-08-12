@@ -11,38 +11,50 @@ class DialogProcessor:
     """Processes dialog output to extract tool calls and locations."""
 
     @staticmethod
-    def extract_response(dialog_text: str):
-        if "###Tool" in dialog_text:
-            LOG.info("Found ###Tool block in output")
+    def extract_response(dialog_text: str, config=None):
+        if "<tool_call>" in dialog_text:
+            LOG.info("Found <tool_call> block in output")
             return DialogProcessor._extract_tool_calls(dialog_text)
-        elif "###Locations" in dialog_text:
-            LOG.info("Found ###Locations block in output")
+        elif "<locations>" in dialog_text:
+            LOG.info("Found <locations> block in output")
             return DialogProcessor._extract_locations(dialog_text)
         else:
-            LOG.warning("No ###Tool or ###Locations found, checking for implicit tool calls")
-            return DialogProcessor._extract_implicit_tool_calls(dialog_text)
+            # Check if implicit tool detection is enabled
+            enable_implicit = getattr(config, 'enable_implicit_tool_detection', True) if config else True
+            if enable_implicit:
+                LOG.warning("No <tool_call> or <locations> found, checking for implicit tool calls")
+                return DialogProcessor._extract_implicit_tool_calls(dialog_text, config)
+            else:
+                LOG.warning("No <tool_call> or <locations> found, and implicit tool detection is disabled")
+                return None
 
     # USED
     @staticmethod
     def _extract_tool_calls(dialog_text: str) -> Dict:
         """Extract tool calls from dialog text."""
-        tool_match = re.search(r"###Tool\s*\n(.*?)(?=\n###|$)", dialog_text, re.DOTALL)
+        # Look for <tool_call>JSON</tool_call> pattern
+        tool_match = re.search(r"<tool_call>(.*?)</tool_call>", dialog_text, re.DOTALL)
 
         if tool_match:
             try:
-                tool_data = json.loads(tool_match.group(1).strip())
-
-                # Determine tool name
-                if "path" in tool_data:
-                    tool_data["tool"] = "view"
-                elif "query" in tool_data:
-                    tool_data["tool"] = "codebase_search"
-                elif "repo_tree" in tool_data or len(tool_data) == 0:
-                    tool_data["tool"] = "repo_tree"
+                tool_json = tool_match.group(1).strip()
+                tool_data = json.loads(tool_json)
+                
+                # The new format expects {"tool_name": {arguments}} structure
+                # Extract the tool name and arguments
+                if len(tool_data) == 1:
+                    tool_name = list(tool_data.keys())[0]
+                    tool_args = tool_data[tool_name]
+                    
+                    # Create the format expected by the tool executor
+                    result_data = {"tool": tool_name}
+                    result_data.update(tool_args)
+                    
+                    return {"type": "tool_calls", "tool_call": result_data}
                 else:
-                    tool_data["tool"] = "unknown"
-
-                return {"type": "tool_calls", "tool_call": tool_data}
+                    LOG.warning(f"Unexpected tool call format: {tool_data}")
+                    return None
+                    
             except json.JSONDecodeError as e:
                 LOG.warning(f"Failed to parse tool call JSON: {e}")
                 return None
@@ -53,7 +65,8 @@ class DialogProcessor:
     def _extract_locations(dialog_text: str) -> Dict:
         """Extract location predictions from dialog text."""
         locations = []
-        locations_match = re.search(r"###Locations\s*\n(.*?)(?=\n###|$)", dialog_text, re.DOTALL)
+        # Look for <locations>content</locations> pattern
+        locations_match = re.search(r"<locations>(.*?)</locations>", dialog_text, re.DOTALL)
 
         if locations_match:
             locations_text = locations_match.group(1).strip()
@@ -79,8 +92,8 @@ class DialogProcessor:
 
     # USED
     @staticmethod
-    def _extract_implicit_tool_calls(dialog_text: str) -> Dict:
-        """Extract tool calls that appear as JSON without ###Tool wrapper."""
+    def _extract_implicit_tool_calls(dialog_text: str, config=None) -> Dict:
+        """Extract tool calls that appear as JSON without <tool_call> wrapper."""
         # Check for JSON after </think> tag
         if "</think>" in dialog_text:
             # Split and clean up the text after </think>
@@ -101,7 +114,7 @@ class DialogProcessor:
 
                     # Determine tool type based on content
                     if "path" in tool_data:
-                        tool_data["tool"] = "view"
+                        tool_data["tool"] = "view_file"
                         # Add view_range if not present
                         if "view_range" not in tool_data:
                             tool_data["view_range"] = None
@@ -122,13 +135,19 @@ class DialogProcessor:
 
             # Second try: Simple file path request
             # Look for quoted or unquoted file paths after </think>
-            file_path_match = re.search(
-                r'(?:\'|")?([^\'"\s]+?\.(?:py|cpp|h|hpp|java|js|ts|rb|go|rs|cs|php))(?:\'|")?',
-                after_think,
-            )
+            file_extensions = getattr(config, 'file_extensions', None) if config else None
+            if file_extensions:
+                # Create pattern from configured file extensions
+                extensions_pattern = "|".join(re.escape(ext) for ext in file_extensions)
+                file_path_pattern = rf'(?:\'|")?([^\'"\s]+?\.(?:{extensions_pattern}))(?:\'|")?'
+            else:
+                # Fallback to default extensions if none provided
+                file_path_pattern = r'(?:\'|")?([^\'"\s]+?\.(?:py|cpp|h|hpp|java|js|ts|rb|go|rs|cs|php))(?:\'|")?'
+            
+            file_path_match = re.search(file_path_pattern, after_think)
             if file_path_match:
                 tool_data = {
-                    "tool": "view",
+                    "tool": "view_file",
                     "path": file_path_match.group(1),
                     "view_range": None,
                 }
@@ -175,7 +194,7 @@ class DialogProcessor:
         if json_match:
             try:
                 tool_data = json.loads(json_match.group())
-                tool_data["tool"] = "view"
+                tool_data["tool"] = "view_file"
                 LOG.warning(f"Found implicit view tool call: {tool_data}")
                 return {"type": "tool_calls", "tool_call": tool_data}
             except json.JSONDecodeError as e:
@@ -231,67 +250,8 @@ class DialogProcessor:
                 # Clean up the search term
                 search_term = re.sub(r'[\'"]', "", search_term)
                 # Filter out common words that shouldn't be searched
-                common_words = {
-                    "the",
-                    "and",
-                    "or",
-                    "but",
-                    "in",
-                    "on",
-                    "at",
-                    "to",
-                    "for",
-                    "of",
-                    "with",
-                    "by",
-                    "is",
-                    "are",
-                    "was",
-                    "were",
-                    "be",
-                    "been",
-                    "have",
-                    "has",
-                    "had",
-                    "do",
-                    "does",
-                    "did",
-                    "will",
-                    "would",
-                    "could",
-                    "should",
-                    "may",
-                    "might",
-                    "can",
-                    "this",
-                    "that",
-                    "these",
-                    "those",
-                    "a",
-                    "an",
-                    "as",
-                    "if",
-                    "then",
-                    "else",
-                    "when",
-                    "where",
-                    "why",
-                    "how",
-                    "what",
-                    "which",
-                    "who",
-                    "whom",
-                    "whose",
-                    "need",
-                    "find",
-                    "search",
-                    "look",
-                    "function",
-                    "class",
-                    "method",
-                    "variable",
-                    "query",
-                }
+                common_words_list = getattr(config, 'common_words_filter', None) if config else None
+                common_words = set(common_words_list)
                 if (
                     search_term
                     and len(search_term) > 2  # Ensure it's not just a short word
@@ -312,5 +272,5 @@ class DialogProcessor:
             LOG.info(f"Found implicit empty repo_tree tool call: {tool_data}")
             return {"type": "tool_calls", "tool_call": tool_data}
 
-        LOG.warning("No ###Tool, ###Locations, or implicit tool calls found in dialog output")
+        LOG.warning("No <tool_call>, <locations>, or implicit tool calls found in dialog output")
         return None

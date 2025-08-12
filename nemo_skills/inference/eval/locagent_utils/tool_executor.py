@@ -17,7 +17,7 @@ class ToolExecutor:
         tool_name = extracted_block.get("tool", "")
         LOG.info(f"Executing tool: {tool_name}")
 
-        if tool_name == "view":
+        if tool_name == "view" or tool_name == "view_file":
             return self._execute_view_tool(extracted_block, repo_dict)
         elif tool_name == "repo_tree":
             return self._execute_repo_tree_tool(repo_dict)

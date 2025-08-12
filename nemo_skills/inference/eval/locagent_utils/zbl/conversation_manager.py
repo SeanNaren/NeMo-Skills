@@ -537,7 +537,7 @@ class ConversationManager:
             return ""
 
         # Create a normalized representation for hashing
-        if tool_call.get("tool") == "view":
+        if tool_call.get("tool") in ["view", "view_file"]:
             # For view tool, use path and view_range
             normalized = {
                 "tool": "view",
