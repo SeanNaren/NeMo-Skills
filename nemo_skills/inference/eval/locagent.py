@@ -39,32 +39,18 @@ tool_call_template = """
 
 @nested_dataclass(kw_only=True)
 class LocalAgentGenerationConfig(GenerateSolutionsConfig):
+    # Core inference settings
     inference: InferenceConfig = field(default_factory=InferenceConfig)  # LLM call parameters
-    server: dict = field(default_factory=dict)
-    mount_directory: str = "/repos/"
-    remove_thinking: bool = True
-    total_steps: int = 5
-
-    # CHANGED: Switched from set to list for OmegaConf compatibility
-    file_extensions: list = field(default_factory=lambda: ["py"])
+    server: dict = field(default_factory=dict)  # Server configuration for model hosting
     
-    # Whether to enable implicit tool call detection (fallback when no explicit tool calls found)
-    enable_implicit_tool_detection: bool = True
+    # Agent behavior settings
+    mount_directory: str = "/repos/"  # Directory where repositories are mounted
+    remove_thinking: bool = True  # Whether to strip thinking tags from output
+    total_steps: int = 5  # Maximum number of agent steps per problem
     
-    # Common words to filter out when detecting implicit search queries
-    common_words_filter: list = field(
-        default_factory=lambda: [
-            "the", "and", "or", "but", "in", "on", "at", "to", "for", "of", "with", "by",
-            "is", "are", "was", "were", "be", "been", "have", "has", "had",
-            "do", "does", "did", "will", "would", "could", "should", "may", "might", "can",
-            "this", "that", "these", "those", "a", "an", "as", "if", "then", "else",
-            "when", "where", "why", "how", "what", "which", "who", "whom", "whose",
-            "need", "find", "search", "look", "function", "class", "method", "variable", "query"
-        ]
-    )
-
-    # CHANGED: Switched from set to list for OmegaConf compatibility
-    exclude_dirs: list = field(
+    # Repository filtering settings
+    file_extensions: list = field(default_factory=lambda: ["py"])  # File types to include in repo
+    exclude_dirs: list = field(  # Directory names to exclude from repository analysis
         default_factory=lambda: [
             "test",
             "tests",
@@ -133,7 +119,23 @@ class LocalAgentGenerationConfig(GenerateSolutionsConfig):
             "contributing",
         ]
     )
-    show_line_counts: bool = True
+    
+    # Tool detection and search settings
+    enable_implicit_tool_detection: bool = True  # Enable fallback tool detection when no explicit calls found
+    common_words_filter: list = field(  # Words to filter out when detecting implicit search queries
+        default_factory=lambda: [
+            "the", "and", "or", "but", "in", "on", "at", "to", "for", "of", "with", "by",
+            "is", "are", "was", "were", "be", "been", "have", "has", "had",
+            "do", "does", "did", "will", "would", "could", "should", "may", "might", "can",
+            "this", "that", "these", "those", "a", "an", "as", "if", "then", "else",
+            "when", "where", "why", "how", "what", "which", "who", "whom", "whose",
+            "need", "find", "search", "look", "function", "class", "method", "variable", "query"
+        ]
+    )
+    
+    # Display settings
+    show_line_counts: bool = True  # Show file line counts in repository tree output
+    max_view_lines: int = 1000  # Maximum lines to show in view tool (0 = no limit)
 
 
 cs = hydra.core.config_store.ConfigStore.instance()
@@ -143,7 +145,7 @@ cs.store(name="base_locagent_generation_config", node=LocalAgentGenerationConfig
 class LocAgentGenerationTask(GenerationTask):
     def __init__(self, cfg: LocalAgentGenerationConfig):
         super().__init__(cfg)
-        self.tool_executor = ToolExecutor()
+        self.tool_executor = ToolExecutor(cfg)
 
     def log_example_prompt(self, data):
         return
@@ -161,7 +163,7 @@ class LocAgentGenerationTask(GenerationTask):
         with open(instance_filepath, 'rb') as f:
             repo_dict = pickle.load(f)
         repo_dict = filter_repo_dict(repo_dict, self.cfg.exclude_dirs, self.cfg.file_extensions)
-        tree_structure = tree_repo_dict(repo_dict)
+        tree_structure = tree_repo_dict(repo_dict, self.cfg.show_line_counts)
 
         inputs = f"""
 ### Problem Description

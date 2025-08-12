@@ -1,7 +1,7 @@
 import os
 import logging
 from nemo_skills.utils import get_logger_name
-from nemo_skills.inference.eval.locagent_utils.utils import tree_repo_dict
+from nemo_skills.inference.eval.locagent_utils.utils import tree_repo_dict, connected_tree_repo_dict
 
 LOG = logging.getLogger(get_logger_name(__file__))
 
@@ -9,18 +9,33 @@ LOG = logging.getLogger(get_logger_name(__file__))
 class ToolExecutor:
     """Handles tool execution for the assistant against a nested dictionary representation of a repository."""
 
-    def __init__(self):
-        pass
+    def __init__(self, cfg=None):
+        self.cfg = cfg
 
     def execute_tool(self, extracted_block: dict, repo_dict: dict) -> str:
         """Execute a tool call and return the result."""
         tool_name = extracted_block.get("tool", "")
+        
+        # Backward compatibility: infer tool from other fields if "tool" field is missing
+        if not tool_name:
+            if "path" in extracted_block:
+                tool_name = "view_file"
+            elif "query" in extracted_block:
+                tool_name = "codebase_search"
+            elif "file" in extracted_block:
+                tool_name = "connected_tree"
+            else:
+                LOG.error(f"Cannot determine tool from extracted_block: {extracted_block}")
+                return f"Error: Cannot determine which tool to execute. Please specify 'tool' field in your JSON."
+        
         LOG.info(f"Executing tool: {tool_name}")
 
         if tool_name == "view" or tool_name == "view_file":
             return self._execute_view_tool(extracted_block, repo_dict)
         elif tool_name == "repo_tree":
             return self._execute_repo_tree_tool(repo_dict)
+        elif tool_name == "connected_tree":
+            return self._execute_connected_tree_tool(extracted_block, repo_dict)
         elif tool_name == "codebase_search":
             return self._execute_codebase_search_tool(extracted_block, repo_dict)
         else:
@@ -47,6 +62,42 @@ class ToolExecutor:
         """Checks if a node in the dictionary represents a directory."""
         return isinstance(node, dict) and "text" not in node
 
+    def _find_similar_files(self, repo_dict: dict, target_filename: str, max_suggestions: int = 3) -> list:
+        """Find files with similar names to the target filename."""
+        similar_files = []
+        target_name = target_filename.lower()
+        
+        def search_recursive(d, current_path=""):
+            for key, value in d.items():
+                current_file_path = f"{current_path}/{key}" if current_path else key
+                
+                if self._is_file_node(value):
+                    # Check if filename matches (case-insensitive)
+                    if key.lower() == target_name:
+                        similar_files.append(current_file_path)
+                    # Check if filename contains the target or target contains filename
+                    elif target_name in key.lower() or key.lower() in target_name:
+                        similar_files.append(current_file_path)
+                elif self._is_dir_node(value):
+                    search_recursive(value, current_file_path)
+        
+        search_recursive(repo_dict["structure"])
+        
+        # Sort by similarity (exact matches first, then by length difference)
+        def similarity_score(filepath):
+            filename = filepath.split('/')[-1].lower()
+            if filename == target_name:
+                return 0  # Exact match gets highest priority
+            elif target_name in filename:
+                return 1  # Target contained in filename
+            elif filename in target_name:
+                return 2  # Filename contained in target
+            else:
+                return 3  # Other matches
+        
+        similar_files.sort(key=similarity_score)
+        return similar_files[:max_suggestions]
+
     def _execute_view_tool(self, extracted_block: dict, repo_dict: dict) -> str:
         """Execute the view tool to show file contents from the dictionary."""
         try:
@@ -63,7 +114,22 @@ class ToolExecutor:
 
             if not self._is_file_node(file_node):
                 LOG.error(f"File not found or is a directory: {file_path}")
-                return f"Error: File not found at path '{file_path}'"
+                
+                # Extract just the filename for searching similar files
+                filename = file_path.split('/')[-1] if '/' in file_path else file_path
+                similar_files = self._find_similar_files(repo_dict, filename)
+                
+                error_msg = f"Error: File not found at path '{file_path}'"
+                
+                if similar_files:
+                    error_msg += f"\n\n💡 Did you mean one of these files?"
+                    for i, similar_file in enumerate(similar_files, 1):
+                        error_msg += f"\n   {i}. {similar_file}"
+                    error_msg += f"\n\nTry using the exact path from the suggestions above."
+                else:
+                    error_msg += f"\n\n💡 No similar files found with name '{filename}'. Use the repo_tree tool to browse available files."
+                
+                return error_msg
 
             lines = file_node["text"]  # The lines are already clean, without trailing '\n'
 
@@ -89,9 +155,28 @@ class ToolExecutor:
                 LOG.error(f"Start line {start_line} is greater than end line {end_line}")
                 return f"Error: Start line {start_line} is greater than end line {end_line}"
 
+            # Check if file content needs truncation
+            max_lines = self.cfg.max_view_lines if self.cfg and hasattr(self.cfg, 'max_view_lines') else 1000
+            total_lines_to_show = end_line - start_line + 1
+            truncated = False
+            truncation_message = ""
+            
+            if max_lines > 0 and total_lines_to_show > max_lines:
+                # Truncate to max_lines, but keep the requested start_line
+                original_end_line = end_line
+                end_line = start_line + max_lines - 1
+                truncated = True
+                truncation_message = f"\n⚠️  WARNING: File content truncated. Showing {max_lines} lines out of {total_lines_to_show} requested lines (original range: {start_line}-{original_end_line}). Use smaller ranges to view specific sections.\n"
+                LOG.warning(f"File {file_path} truncated from {total_lines_to_show} to {max_lines} lines")
+
             result_lines = [f"{i+1:4d}: {lines[i]}" for i in range(start_line - 1, end_line)]
             LOG.info(f"Successfully read {len(result_lines)} lines from {file_path}")
-            file_content = f"File: {file_path} (lines {start_line}-{end_line})\n" + "\n".join(result_lines)
+            
+            file_header = f"File: {file_path} (lines {start_line}-{end_line})"
+            if truncated:
+                file_header += f" [TRUNCATED - Original file has {len(lines)} total lines]"
+            
+            file_content = file_header + truncation_message + "\n" + "\n".join(result_lines)
             return file_content
 
         except Exception as e:
@@ -101,10 +186,23 @@ class ToolExecutor:
     def _execute_repo_tree_tool(self, repo_dict: dict) -> str:
         """Generates a tree view of the repository from the nested dictionary."""
         try:
-            return tree_repo_dict(repo_dict)
+            show_line_counts = self.cfg.show_line_counts if self.cfg else True
+            return tree_repo_dict(repo_dict, show_line_counts)
         except Exception as e:
             LOG.error(f"Error executing repo_tree tool: {str(e)}")
             return f"Error executing repo_tree tool: {str(e)}"
+
+    def _execute_connected_tree_tool(self, extracted_block: dict, repo_dict: dict) -> str:
+        """Generates a connected tree view showing import dependencies."""
+        try:
+            file_path = extracted_block.get("file", None)
+            show_line_counts = self.cfg.show_line_counts if self.cfg else True
+            
+            LOG.info(f"Generating connected tree for file: {file_path or 'entire repository'}")
+            return connected_tree_repo_dict(repo_dict, file_path, show_line_counts)
+        except Exception as e:
+            LOG.error(f"Error executing connected_tree tool: {str(e)}")
+            return f"Error executing connected_tree tool: {str(e)}"
 
     def _execute_codebase_search_tool(self, extracted_block: dict, repo_dict: dict) -> str:
         """Executes a codebase search on the nested dictionary, showing context around matches."""

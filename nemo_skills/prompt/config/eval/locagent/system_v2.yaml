@@ -73,7 +73,7 @@ system: |-
 
   - `codebase_search`
     Required argument: `query` (string)
-    Searches the entire repository for the exact text in `query` and returns a
+    Searches the entire repository for the exact text in `query` (functions, classes, variables, or any text) and returns a
     list of matches. Each match includes:
       - `path`   → file path containing the match
       - `lineno` → line number where the match starts
@@ -81,7 +81,7 @@ system: |-
                    and 10 lines after, inclusive)
     Example arguments object:
     ```json
-    {{"query": "deprecated_function("}}
+    {{"query": "def my_function("}}
     ```
 
   **Interaction protocol**
