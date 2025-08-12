@@ -267,13 +267,12 @@ def locagent_generation(cfg: LocalAgentGenerationConfig):
     task.generate()
 
 
-HELP_MESSAGE = get_help_message(
-    LocalAgentGenerationConfig,
-    server_params=server_params(),
-)
-
 if __name__ == "__main__":
     if '--help' in sys.argv or '-h' in sys.argv:
+        HELP_MESSAGE = get_help_message(
+            LocalAgentGenerationConfig,
+            server_params=server_params(),
+        )
         print(HELP_MESSAGE)
     else:
         setup_logging()

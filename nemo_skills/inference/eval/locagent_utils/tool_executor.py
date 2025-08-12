@@ -166,17 +166,26 @@ class ToolExecutor:
                 original_end_line = end_line
                 end_line = start_line + max_lines - 1
                 truncated = True
-                truncation_message = f"\n⚠️  WARNING: File content truncated. Showing {max_lines} lines out of {total_lines_to_show} requested lines (original range: {start_line}-{original_end_line}). Use smaller ranges to view specific sections.\n"
+                truncation_message = f"\nWARNING: File content truncated. Showing {max_lines} lines out of {total_lines_to_show} requested lines (original range: {start_line}-{original_end_line}). Use smaller ranges to view specific sections.\n"
                 LOG.warning(f"File {file_path} truncated from {total_lines_to_show} to {max_lines} lines")
 
             result_lines = [f"{i+1:4d}: {lines[i]}" for i in range(start_line - 1, end_line)]
             LOG.info(f"Successfully read {len(result_lines)} lines from {file_path}")
             
+            # Generate connected tree metadata for this file
+            show_line_counts = self.cfg.show_line_counts if self.cfg else True
+            try:
+                connected_tree_info = connected_tree_repo_dict(repo_dict, file_path, show_line_counts)
+                metadata_section = f"=== DEPENDENCY METADATA ===\n{connected_tree_info}\n{'=' * 50}\n\n"
+            except Exception as e:
+                LOG.warning(f"Failed to generate connected tree metadata for {file_path}: {e}")
+                metadata_section = ""
+            
             file_header = f"File: {file_path} (lines {start_line}-{end_line})"
             if truncated:
                 file_header += f" [TRUNCATED - Original file has {len(lines)} total lines]"
             
-            file_content = file_header + truncation_message + "\n" + "\n".join(result_lines)
+            file_content = metadata_section + file_header + truncation_message + "\n" + "\n".join(result_lines)
             return file_content
 
         except Exception as e:
