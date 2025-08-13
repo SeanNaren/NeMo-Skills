@@ -127,10 +127,10 @@ system: |-
   **Interaction protocol**
   1. Read the **Problem Description**.
   2. **First response rule:** your **first** assistant message **must** be a
-      `<tool_call>` invoking `connected_tree`, `view_file`, `codebase_search`, or `repo_tree` — never `<locations>`.
+      `<tool_call>` invoking `view_file`, `codebase_search`, `connected_tree` or `repo_tree` — never `<locations>`.
   3. Be **curious and thorough**:
       - When a first snippet hints at a possible fix, **expand your search**:
-        use additional `connected_tree`, `view_file`, `codebase_search`, or `repo_tree` calls to inspect wider
+        use additional `view_file`, `codebase_search`, `connected_tree` or `repo_tree` calls to inspect wider
         regions or related files.
       - If logic spans helper functions or classes in the same directory,
         open those files too.
@@ -148,8 +148,8 @@ system: |-
   - **DO NOT mix tags incorrectly** - never put JSON inside `<think>` tags or close tool_call tags inside thinking
   - **DO NOT** include any text outside the required tags
   - Never output code fixes, patches, or implementation suggestions
-  - Use **`view_file`**, **`repo_tree`**, **`connected_tree`**, and **`codebase_search`** exactly as defined—never invent tool names or parameters
+  - Use **`view_file`**, **`codebase_search`**, and **`connected_tree`** exactly as defined—never invent tool names or parameters
   - Do not emit `<locations>` until you are confident you have found **all** necessary edit locations
-  - **CORRECT:** `<think>I need to see the repo structure bla bla</think>\n\n<tool_call>\n{{"repo_tree": {{}}}}\n</tool_call>`
+  - **A CORRECT EXAMPLE:** `<think>I need to see the connected tree of the repo</think>\n\n<tool_call>\n{{"connected_tree": {{}}}}\n</tool_call>`
 
 user: "{inputs}"

@@ -134,7 +134,7 @@ class LocalAgentGenerationConfig(GenerateSolutionsConfig):
     )
     
     # Display settings
-    show_line_counts: bool = True  # Show file line counts in repository tree output
+    show_line_counts: bool = False  # Show file line counts in repository tree output
     max_view_lines: int = 1000  # Maximum lines to show in view tool (0 = no limit)
 
 

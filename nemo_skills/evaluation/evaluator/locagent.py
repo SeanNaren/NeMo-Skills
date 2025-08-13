@@ -255,11 +255,34 @@ def eval_metrics(eval_config, locagent_data):
     for prob_data in locagent_data:
         json_idx[prob_data['instance_id']] = locagent_data.index(prob_data)
 
+    # Initialize status_lists with correct structure
+    status_lists = [[] for _ in range(len(locagent_data))]
+    
     # Prepare all tasks for parallel execution
     tasks = []
+    successful_samples = 0
+    failed_samples = 0
+    
     for elem_idx, elem in enumerate(locagent_data):        
         if elem["status"] != "success":
+            failed_samples += 1
+            # Assign zero metrics to failed samples
+            ground_truth_locations = extract_locations_from_patch(elem["patch"])
+            zero_metrics = {
+                "file_level": {"precision": 0.0, "recall": 0.0, "f1": 0.0, "exact_match": 0.0},
+                "line_level_overlap_50": {"precision": 0.0, "recall": 0.0, "f1": 0.0, "exact_match": 0.0, "average_overlap": 0.0},
+                "line_level_overlap_25": {"precision": 0.0, "recall": 0.0, "f1": 0.0, "exact_match": 0.0, "average_overlap": 0.0},
+                "line_level_overlap_75": {"precision": 0.0, "recall": 0.0, "f1": 0.0, "exact_match": 0.0, "average_overlap": 0.0},
+                "ground_truth_locations": ground_truth_locations,
+                "ground_truth_count": len(ground_truth_locations),
+                "predicted_count": 0,
+                "ground_truth_files": list({loc['file_path'] for loc in ground_truth_locations if 'file_path' in loc}),
+                "predicted_files": [],
+                "is_failed_sample": True,  # Mark this explicitly as a failed sample
+            }
+            status_lists[elem_idx].append(zero_metrics)
             continue
+        successful_samples += 1
         ground_truth_locations = extract_locations_from_patch(elem["patch"])
         tasks.append((eval_config, elem_idx, ground_truth_locations, elem["locations"]))
         # for step_id, full_generation in elem['generation'].items():
@@ -267,8 +290,21 @@ def eval_metrics(eval_config, locagent_data):
         #     json_content = locagent_data[json_idx[instance_id]]
         #     tasks.append((eval_config, elem_idx, full_generation, json_content, subtask_step))
 
-    # Initialize status_lists with correct structure
-    status_lists = [[] for _ in range(len(locagent_data))]
+    # Log processing statistics
+    total_samples = len(locagent_data)
+    LOG.info(f"Processing statistics:")
+    LOG.info(f"  Total samples: {total_samples}")
+    LOG.info(f"  Successful samples: {successful_samples}")
+    LOG.info(f"  Failed samples: {failed_samples}")
+    LOG.info(f"  Success rate: {(successful_samples / total_samples * 100):.1f}%")
+    
+    # Store processing statistics to be included in metrics
+    processing_stats = {
+        "total_samples": total_samples,
+        "successful_samples": successful_samples, 
+        "failed_samples": failed_samples,
+        "success_rate": (successful_samples / total_samples * 100) if total_samples > 0 else 0.0
+    }
 
     # Execute tasks in parallel
     with ThreadPoolExecutor(max_workers=eval_config.num_parallel_requests) as executor:
@@ -278,7 +314,7 @@ def eval_metrics(eval_config, locagent_data):
     for elem_idx, output_dict in results:
         status_lists[elem_idx].append(output_dict)
 
-    return status_lists
+    return status_lists, processing_stats
 
 
 def eval_locagent(cfg):
@@ -286,8 +322,11 @@ def eval_locagent(cfg):
     for file in unroll_files(cfg.input_files):
         with open(file, 'rt', encoding='utf-8') as fin:
             data = [json.loads(line) for line in fin]
-        status_lists = eval_metrics(eval_config, data)
+        status_lists, processing_stats = eval_metrics(eval_config, data)
         with open(file, 'wt', encoding='utf-8') as fout:
             for idx, elem in enumerate(data):
                 elem['eval_status'] = status_lists[idx]
+                # Add processing statistics to the first element (as metadata)
+                if idx == 0:
+                    elem['processing_stats'] = processing_stats
                 fout.write(json.dumps(elem) + "\n")

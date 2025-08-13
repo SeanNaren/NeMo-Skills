@@ -93,6 +93,8 @@ class LocAgentMetrics(BaseMetrics):
         self.line_level_metrics_75 = []
         self.total_gt_locations = 0
         self.total_pred_locations = 0
+        self.successful_samples = 0
+        self.failed_samples = 0
     
     def _get_score_dict(self, prediction: dict) -> dict[str, bool | int | float]:
         """Extract metrics from the prediction eval_status."""
@@ -138,7 +140,8 @@ class LocAgentMetrics(BaseMetrics):
                 "line_level_overlap_25": {"precision": 0.0, "recall": 0.0, "f1": 0.0, "exact_match": 0.0, "average_overlap": 0.0},
                 "line_level_overlap_75": {"precision": 0.0, "recall": 0.0, "f1": 0.0, "exact_match": 0.0, "average_overlap": 0.0},
                 "ground_truth_count": 0,
-                "predicted_count": 0
+                "predicted_count": 0,
+                "is_failed_sample": True
             }]
         }
 
@@ -146,11 +149,36 @@ class LocAgentMetrics(BaseMetrics):
         """Update metrics with new predictions."""
         super().update(predictions)
         
+        # Extract processing statistics from the first prediction if available
+        if predictions and 'processing_stats' in predictions[0]:
+            processing_stats = predictions[0]['processing_stats']
+            self.successful_samples = processing_stats.get('successful_samples', 0)
+            self.failed_samples = processing_stats.get('failed_samples', 0)
+        
         # Collect detailed metrics for aggregate computation
         for prediction in predictions:
             eval_status = prediction.get('eval_status', [])
             if eval_status and isinstance(eval_status[0], dict):
                 eval_result = eval_status[0]
+                
+                # If we don't have processing stats from metadata, count samples manually
+                if not predictions or 'processing_stats' not in predictions[0]:
+                    # Check if this was a successful or failed sample
+                    # Use explicit flag if available, otherwise infer from metrics
+                    is_failed_sample = eval_result.get('is_failed_sample', False)
+                    if not is_failed_sample:
+                        # Fallback detection for samples without explicit flag
+                        predicted_count = eval_result.get('predicted_count', 0)
+                        file_metrics = eval_result.get('file_level', {})
+                        is_failed_sample = (predicted_count == 0 and 
+                                          file_metrics.get('precision', 0) == 0 and 
+                                          file_metrics.get('recall', 0) == 0 and 
+                                          file_metrics.get('f1', 0) == 0)
+                    
+                    if is_failed_sample:
+                        self.failed_samples += 1
+                    else:
+                        self.successful_samples += 1
                 
                 # Store individual metrics for later aggregation
                 if 'file_level' in eval_result:
@@ -245,6 +273,8 @@ class LocAgentMetrics(BaseMetrics):
         self.line_level_metrics_75 = []
         self.total_gt_locations = 0
         self.total_pred_locations = 0
+        self.successful_samples = 0
+        self.failed_samples = 0
 
     def metrics_to_print(self):
         """Define which metrics to print and their formatting for better readability."""
@@ -258,6 +288,12 @@ class LocAgentMetrics(BaseMetrics):
         
         # Return a well-organized, readable set of metrics
         return {
+            # Processing Statistics
+            "total_samples": format_count,
+            "successful_samples": format_count,
+            "failed_samples": format_count,
+            "success_rate": as_percentage,
+            
             # Summary
             "num_entries": lambda x: str(int(x)),
             "total_gt_locs": format_count,
@@ -286,6 +322,14 @@ class LocAgentMetrics(BaseMetrics):
         print(f"\n{'=' * 80}")
         print(f" {benchmark_name} - Detailed LocAgent Evaluation Results ".center(80, '='))
         print(f"{'=' * 80}")
+        
+        # Processing Statistics section
+        print(f"\n🔄 PROCESSING STATISTICS")
+        print(f"{'─' * 50}")
+        print(f"{'Total Samples:':<25} {metrics.get('total_samples', 0):>8}")
+        print(f"{'Successful Samples:':<25} {metrics.get('successful_samples', 0):>8}")
+        print(f"{'Failed Samples:':<25} {metrics.get('failed_samples', 0):>8}")
+        print(f"{'Success Rate:':<25} {metrics.get('success_rate', 0):>8.1f}%")
         
         # Summary section
         print(f"\n📊 SUMMARY STATISTICS")
@@ -384,7 +428,16 @@ class LocAgentMetrics(BaseMetrics):
         
         # Add aggregate metrics to each aggregation mode with readable names
         for agg_mode in metrics_dict.keys():
+            total_samples = self.successful_samples + self.failed_samples
+            success_rate = (self.successful_samples / total_samples * 100) if total_samples > 0 else 0.0
+            
             metrics_dict[agg_mode].update({
+                # Processing statistics
+                "total_samples": total_samples,
+                "successful_samples": self.successful_samples,
+                "failed_samples": self.failed_samples,
+                "success_rate": success_rate,
+                
                 # Summary statistics with shorter names for table
                 "total_gt_locs": self.total_gt_locations,
                 "total_pred_locs": self.total_pred_locations,
