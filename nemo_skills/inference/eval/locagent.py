@@ -225,6 +225,12 @@ class LocAgentGenerationTask(GenerationTask):
                     break
 
                 print("Current messages", data_point['turns'])
+                
+                # Check if we've reached the maximum steps without success
+                if cur_step == total_steps - 1 and status is None:
+                    status = "failed"
+                    reason = "max_steps_exceeded"
+                    break
 
             if status is None:
                 # If we exit the loop without setting status, treat as failed
