@@ -355,10 +355,40 @@ class OpenAIAPIModel(BaseModel):
         self.cancel_all_generations()
 
     def get_model_name_from_server(self):
-        model_list = self.client.models.list()
-        if not model_list.data:
-            raise ValueError("No models available on the server.")
-        return model_list.data[0].id
+        """Get model name from server with retry logic for server startup."""
+        from openai import NotFoundError, APIConnectionError
+        import requests
+        
+        max_retries = 60  # Maximum 5 minutes (60 * 5 seconds)
+        retry_delay = 5  # Start with 5 seconds
+        
+        for attempt in range(max_retries):
+            try:
+                model_list = self.client.models.list()
+                if not model_list.data:
+                    raise ValueError("No models available on the server.")
+                LOG.info(f"Successfully connected to server. Model: {model_list.data[0].id}")
+                return model_list.data[0].id
+            except (NotFoundError, APIConnectionError, requests.ConnectionError, requests.HTTPError) as e:
+                error_msg = str(e)
+                is_server_starting = (
+                    isinstance(e, NotFoundError) or 
+                    isinstance(e, APIConnectionError) or
+                    isinstance(e, requests.ConnectionError) or
+                    "404" in error_msg or 
+                    "connection" in error_msg.lower()
+                )
+                
+                if is_server_starting and attempt < max_retries - 1:
+                    if attempt == 0:
+                        LOG.info(f"Waiting for server to be ready at {self.server_host}:{self.server_port}...")
+                    elif attempt % 6 == 0:  # Log every 30 seconds
+                        LOG.info(f"Still waiting for server... (attempt {attempt + 1}/{max_retries})")
+                    time.sleep(retry_delay)
+                else:
+                    if is_server_starting:
+                        LOG.error(f"Server not ready after {max_retries * retry_delay} seconds")
+                    raise e
 
     def _register_generation(self, gen_id: str, response: Any) -> None:
         """Register a new generation with the tracker."""

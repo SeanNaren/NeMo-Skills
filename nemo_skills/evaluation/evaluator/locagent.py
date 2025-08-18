@@ -40,16 +40,19 @@ def evaluate_file_level_accuracy(ground_truth_locations: List[Dict], predicted_l
         predicted_locations: List of predicted location dictionaries
     
     Returns:
-        Dictionary containing precision, recall, f1, and exact_match metrics
+        Dictionary containing precision, recall, f1, exact_match, and accuracy metrics
     """
     if not ground_truth_locations and not predicted_locations:
-        return {"precision": 1.0, "recall": 1.0, "f1": 1.0, "exact_match": 1.0}
+        # Both empty - this is a perfect match in a sense (nothing needed, nothing predicted)
+        return {"precision": 1.0, "recall": 1.0, "f1": 1.0, "exact_match": 1.0, "accuracy": 1.0}
     
     if not ground_truth_locations:
-        return {"precision": 0.0, "recall": 1.0, "f1": 0.0, "exact_match": 0.0}
+        # No ground truth but made predictions - all predictions are false positives
+        return {"precision": 0.0, "recall": 0.0, "f1": 0.0, "exact_match": 0.0, "accuracy": 0.0}
     
     if not predicted_locations:
-        return {"precision": 1.0, "recall": 0.0, "f1": 0.0, "exact_match": 0.0}
+        # Ground truth exists but no predictions - all ground truth are false negatives
+        return {"precision": 0.0, "recall": 0.0, "f1": 0.0, "exact_match": 0.0, "accuracy": 0.0}
     
     # Extract unique file paths (with defensive programming for missing file_path key)
     ground_truth_files = {loc['file_path'] for loc in ground_truth_locations if 'file_path' in loc}
@@ -65,13 +68,27 @@ def evaluate_file_level_accuracy(ground_truth_locations: List[Dict], predicted_l
     f1 = 2 * (precision * recall) / (precision + recall) if (precision + recall) > 0 else 0.0
     exact_match = 1.0 if ground_truth_files == predicted_files else 0.0
     
+    # Calculate accuracy as Jaccard index (IoU) - intersection over union of file sets
+    # This is a common measure for set similarity
+    if len(ground_truth_files) == 0 and len(predicted_files) == 0:
+        accuracy = 1.0  # Both empty
+    elif len(ground_truth_files.union(predicted_files)) == 0:
+        accuracy = 0.0  # Should not happen, but defensive programming
+    else:
+        accuracy = len(ground_truth_files.intersection(predicted_files)) / len(ground_truth_files.union(predicted_files))
+    
     return {
         "precision": precision,
         "recall": recall,
         "f1": f1,
-        "exact_match": exact_match
+        "exact_match": exact_match,
+        "accuracy": accuracy
     }
 
+
+# Note: The following overlap-based functions are kept for potential future use,
+# but are not currently used in favor of the chunk containment metrics which better
+# align with the use case where predictions encompassing ground truth get full credit.
 
 def calculate_line_overlap(gt_start: int, gt_end: int, pred_start: int, pred_end: int) -> float:
     """
@@ -99,6 +116,116 @@ def calculate_line_overlap(gt_start: int, gt_end: int, pred_start: int, pred_end
     union_size = union_end - union_start + 1
     
     return intersection_size / union_size
+
+
+def evaluate_chunk_containment_metrics(ground_truth_locations: List[Dict], predicted_locations: List[Dict]) -> Dict[str, float]:
+    """
+    Calculate chunk-level containment metrics where predictions are rewarded for completely encompassing ground truth.
+    
+    Args:
+        ground_truth_locations: List of ground truth location dictionaries
+        predicted_locations: List of predicted location dictionaries
+    
+    Returns:
+        Dictionary containing coverage_recall, avg_prediction_tightness, and precision metrics
+    """
+    if not ground_truth_locations and not predicted_locations:
+        return {
+            "coverage_recall": 0.0,  # No GT to cover, so 0
+            "avg_prediction_tightness": 0.0,  # No predictions, so 0
+            "precision": 0.0,  # No predictions can be useful, so 0
+            "covered_chunks": 0,
+            "total_chunks": 0,
+            "useful_predictions": 0,
+            "total_predictions": 0
+        }
+    
+    if not ground_truth_locations:
+        return {
+            "coverage_recall": 0.0,  # No GT to cover, so 0
+            "avg_prediction_tightness": 0.0,
+            "precision": 0.0,  # All predictions are useless (no GT), so 0
+            "covered_chunks": 0,
+            "total_chunks": 0,
+            "useful_predictions": 0,
+            "total_predictions": len(predicted_locations)
+        }
+    
+    if not predicted_locations:
+        return {
+            "coverage_recall": 0.0,
+            "avg_prediction_tightness": 0.0,
+            "precision": 0.0,
+            "covered_chunks": 0,
+            "total_chunks": len(ground_truth_locations),
+            "useful_predictions": 0,
+            "total_predictions": 0
+        }
+    
+    # Track which ground truths are covered and by which predictions
+    covered_gt_indices = set()
+    useful_pred_indices = set()
+    tightness_scores = []
+    
+    # For each ground truth, check if any prediction fully covers it
+    for gt_idx, gt_loc in enumerate(ground_truth_locations):
+        if 'file_path' not in gt_loc or 'start_line' not in gt_loc or 'end_line' not in gt_loc:
+            continue
+            
+        gt_file = gt_loc['file_path']
+        gt_start = gt_loc['start_line']
+        gt_end = gt_loc['end_line']
+        
+        best_tightness = 0.0
+        found_coverage = False
+        
+        # Check all predictions for this ground truth
+        for pred_idx, pred_loc in enumerate(predicted_locations):
+            if 'file_path' not in pred_loc or 'start_line' not in pred_loc or 'end_line' not in pred_loc:
+                continue
+                
+            # Must be in the same file
+            if pred_loc['file_path'] != gt_file:
+                continue
+                
+            pred_start = pred_loc['start_line']
+            pred_end = pred_loc['end_line']
+            
+            # Check if prediction fully contains ground truth
+            if pred_start <= gt_start and pred_end >= gt_end:
+                found_coverage = True
+                useful_pred_indices.add(pred_idx)
+                
+                # Calculate tightness (how tight is the prediction around the ground truth)
+                gt_length = gt_end - gt_start + 1
+                pred_length = pred_end - pred_start + 1
+                tightness = gt_length / pred_length if pred_length > 0 else 0.0
+                
+                # Keep the best (tightest) prediction for this ground truth
+                if tightness > best_tightness:
+                    best_tightness = tightness
+        
+        if found_coverage:
+            covered_gt_indices.add(gt_idx)
+            tightness_scores.append(best_tightness)
+    
+    # Calculate metrics
+    total_gt = len([gt for gt in ground_truth_locations if all(k in gt for k in ['file_path', 'start_line', 'end_line'])])
+    total_pred = len([pred for pred in predicted_locations if all(k in pred for k in ['file_path', 'start_line', 'end_line'])])
+    
+    coverage_recall = len(covered_gt_indices) / total_gt if total_gt > 0 else 0.0
+    avg_tightness = sum(tightness_scores) / len(tightness_scores) if tightness_scores else 0.0
+    precision = len(useful_pred_indices) / total_pred if total_pred > 0 else 0.0
+    
+    return {
+        "coverage_recall": coverage_recall,
+        "avg_prediction_tightness": avg_tightness,
+        "precision": precision,
+        "covered_chunks": len(covered_gt_indices),
+        "total_chunks": total_gt,
+        "useful_predictions": len(useful_pred_indices),
+        "total_predictions": total_pred
+    }
 
 
 def evaluate_line_level_accuracy(ground_truth_locations: List[Dict], predicted_locations: List[Dict], 
@@ -222,16 +349,12 @@ def _execute_single_test(args):
     # Calculate file-level accuracy
     file_level_metrics = evaluate_file_level_accuracy(ground_truth_locations, locations)
     
-    # Calculate line-level accuracy with different overlap thresholds
-    line_level_metrics_50 = evaluate_line_level_accuracy(ground_truth_locations, locations, overlap_threshold=0.5)
-    line_level_metrics_25 = evaluate_line_level_accuracy(ground_truth_locations, locations, overlap_threshold=0.25)
-    line_level_metrics_75 = evaluate_line_level_accuracy(ground_truth_locations, locations, overlap_threshold=0.75)
+    # Calculate chunk containment metrics
+    chunk_containment_metrics = evaluate_chunk_containment_metrics(ground_truth_locations, locations)
     
     output_dict = {
         "file_level": file_level_metrics,
-        "line_level_overlap_50": line_level_metrics_50,
-        "line_level_overlap_25": line_level_metrics_25,
-        "line_level_overlap_75": line_level_metrics_75,
+        "chunk_containment": chunk_containment_metrics,
         "ground_truth_locations": ground_truth_locations,
         "ground_truth_count": len(ground_truth_locations),
         "predicted_count": len(locations),
@@ -244,7 +367,9 @@ def _execute_single_test(args):
     LOG.info(f"  Ground truth locations: {len(ground_truth_locations)}")
     LOG.info(f"  Predicted locations: {len(locations)}")
     LOG.info(f"  File-level F1: {file_level_metrics['f1']:.3f}")
-    LOG.info(f"  Line-level F1 (50% overlap): {line_level_metrics_50['f1']:.3f}")
+    LOG.info(f"  File-level Accuracy: {file_level_metrics['accuracy']:.3f}")
+    LOG.info(f"  Chunk Coverage Recall: {chunk_containment_metrics['coverage_recall']:.3f}")
+    LOG.info(f"  Avg Prediction Tightness: {chunk_containment_metrics['avg_prediction_tightness']:.3f}")
     
     return elem_idx, output_dict
 
@@ -269,10 +394,16 @@ def eval_metrics(eval_config, locagent_data):
             # Assign zero metrics to failed samples
             ground_truth_locations = extract_locations_from_patch(elem["patch"])
             zero_metrics = {
-                "file_level": {"precision": 0.0, "recall": 0.0, "f1": 0.0, "exact_match": 0.0},
-                "line_level_overlap_50": {"precision": 0.0, "recall": 0.0, "f1": 0.0, "exact_match": 0.0, "average_overlap": 0.0},
-                "line_level_overlap_25": {"precision": 0.0, "recall": 0.0, "f1": 0.0, "exact_match": 0.0, "average_overlap": 0.0},
-                "line_level_overlap_75": {"precision": 0.0, "recall": 0.0, "f1": 0.0, "exact_match": 0.0, "average_overlap": 0.0},
+                "file_level": {"precision": 0.0, "recall": 0.0, "f1": 0.0, "exact_match": 0.0, "accuracy": 0.0},
+                "chunk_containment": {
+                    "coverage_recall": 0.0,
+                    "avg_prediction_tightness": 0.0,
+                    "precision": 0.0,
+                    "covered_chunks": 0,
+                    "total_chunks": len(ground_truth_locations),
+                    "useful_predictions": 0,
+                    "total_predictions": 0
+                },
                 "ground_truth_locations": ground_truth_locations,
                 "ground_truth_count": len(ground_truth_locations),
                 "predicted_count": 0,
@@ -321,12 +452,37 @@ def eval_locagent(cfg):
     eval_config = LocalAgentEvaluatorConfig(**cfg.eval_config)
     for file in unroll_files(cfg.input_files):
         with open(file, 'rt', encoding='utf-8') as fin:
-            data = [json.loads(line) for line in fin]
+            data = []
+            null_indices = []
+            for line_idx, line in enumerate(fin):
+                parsed = json.loads(line)
+                if parsed is None:
+                    LOG.warning(f"Skipping null entry at line {line_idx + 1} in {file}")
+                    null_indices.append(line_idx)
+                else:
+                    data.append(parsed)
+        
+        if not data:
+            LOG.warning(f"No valid data to evaluate in {file}")
+            continue
+            
         status_lists, processing_stats = eval_metrics(eval_config, data)
-        with open(file, 'wt', encoding='utf-8') as fout:
-            for idx, elem in enumerate(data):
-                elem['eval_status'] = status_lists[idx]
+        
+        # Reconstruct the full output including null entries
+        all_outputs = []
+        data_idx = 0
+        for line_idx in range(len(data) + len(null_indices)):
+            if line_idx in null_indices:
+                all_outputs.append(None)
+            else:
+                elem = data[data_idx]
+                elem['eval_status'] = status_lists[data_idx]
                 # Add processing statistics to the first element (as metadata)
-                if idx == 0:
+                if data_idx == 0:
                     elem['processing_stats'] = processing_stats
+                all_outputs.append(elem)
+                data_idx += 1
+        
+        with open(file, 'wt', encoding='utf-8') as fout:
+            for elem in all_outputs:
                 fout.write(json.dumps(elem) + "\n")
