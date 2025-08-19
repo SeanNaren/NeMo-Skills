@@ -16,18 +16,27 @@ import logging
 import pickle
 import sys
 from pathlib import Path
-from copy import deepcopy
 from dataclasses import field
 
 import hydra
 import openai
 
-from nemo_skills.inference.eval.locagent_utils.dialog_processor import DialogProcessor
-from nemo_skills.inference.eval.locagent_utils.tool_executor import ToolExecutor
 from nemo_skills.inference.eval.locagent_utils.utils import tree_repo_dict, filter_repo_dict
 from nemo_skills.inference.generate import GenerateSolutionsConfig, GenerationTask, InferenceConfig
 from nemo_skills.inference.model import server_params
 from nemo_skills.utils import get_help_message, get_logger_name, nested_dataclass, remove_thinking, setup_logging
+
+PROMPT_TEMPLATE_VERSION: str = "v5"  # Template version for prompts
+
+import importlib
+
+module_base = f"nemo_skills.inference.eval.locagent_utils.{PROMPT_TEMPLATE_VERSION}"
+
+dialog_processor = importlib.import_module(f"{module_base}.dialog_processor")
+tool_executor = importlib.import_module(f"{module_base}.tool_executor")
+
+DialogProcessor = dialog_processor.DialogProcessor
+ToolExecutor = tool_executor.ToolExecutor
 
 LOG = logging.getLogger(get_logger_name(__file__))
 
@@ -152,6 +161,17 @@ class LocAgentGenerationTask(GenerationTask):
 
     async def process_single_datapoint(self, data_point, all_data):
         """Will do all necessary generations to get a single answer for the data point."""
+        # Filter out samples with empty problem statements
+        if not data_point.get('problem_statement', '').strip():
+            LOG.warning(f"Skipping data point {data_point.get('instance_id', 'unknown')} due to empty problem statement")
+            return {
+                'generation': [],
+                'total_generated_tokens': 0,
+                'num_turns': 0,
+                'status': 'skipped',
+                'reason': 'empty_problem_statement',
+            }
+        
         total_steps = self.cfg.total_steps
         chat_history = []
 

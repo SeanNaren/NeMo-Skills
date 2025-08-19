@@ -387,9 +387,34 @@ def eval_metrics(eval_config, locagent_data):
     tasks = []
     successful_samples = 0
     failed_samples = 0
+    skipped_samples = 0
     
     for elem_idx, elem in enumerate(locagent_data):        
-        if elem["status"] != "success":
+        if elem["status"] == "skipped":
+            skipped_samples += 1
+            # Assign zero metrics to skipped samples
+            ground_truth_locations = extract_locations_from_patch(elem["patch"])
+            skip_metrics = {
+                "file_level": {"precision": 0.0, "recall": 0.0, "f1": 0.0, "exact_match": 0.0, "accuracy": 0.0},
+                "chunk_containment": {
+                    "coverage_recall": 0.0,
+                    "avg_prediction_tightness": 0.0,
+                    "precision": 0.0,
+                    "covered_chunks": 0,
+                    "total_chunks": len(ground_truth_locations),
+                    "useful_predictions": 0,
+                    "total_predictions": 0
+                },
+                "ground_truth_locations": ground_truth_locations,
+                "ground_truth_count": len(ground_truth_locations),
+                "predicted_count": 0,
+                "ground_truth_files": list({loc['file_path'] for loc in ground_truth_locations if 'file_path' in loc}),
+                "predicted_files": [],
+                "is_skipped_sample": True,  # Mark this explicitly as a skipped sample
+                "skip_reason": elem.get("reason", "unknown")
+            }
+            status_lists[elem_idx].append(skip_metrics)
+        elif elem["status"] != "success":
             failed_samples += 1
             # Assign zero metrics to failed samples
             ground_truth_locations = extract_locations_from_patch(elem["patch"])
@@ -427,6 +452,7 @@ def eval_metrics(eval_config, locagent_data):
     LOG.info(f"  Total samples: {total_samples}")
     LOG.info(f"  Successful samples: {successful_samples}")
     LOG.info(f"  Failed samples: {failed_samples}")
+    LOG.info(f"  Skipped samples: {skipped_samples}")
     LOG.info(f"  Success rate: {(successful_samples / total_samples * 100):.1f}%")
     
     # Store processing statistics to be included in metrics
@@ -434,6 +460,7 @@ def eval_metrics(eval_config, locagent_data):
         "total_samples": total_samples,
         "successful_samples": successful_samples, 
         "failed_samples": failed_samples,
+        "skipped_samples": skipped_samples,
         "success_rate": (successful_samples / total_samples * 100) if total_samples > 0 else 0.0
     }
 

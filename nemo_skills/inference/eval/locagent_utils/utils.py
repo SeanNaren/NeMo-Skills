@@ -284,31 +284,22 @@ def connected_tree_repo_dict(repo_dict: dict, target_file: str = None, show_line
 
 
 def extract_locations_from_patch(patch: str) -> List[Dict[str, Any]]:
-    """Extract added line ranges from a git patch.
+    """Extract changed line ranges from a git patch using ORIGINAL file line numbers.
 
     Returns list of dicts: file_path, start_line, end_line, raw.
-    Only additions (+) are tracked.
+    Tracks where changes occur in the original file.
     """
     if not patch:
         return []
 
     locations = []
     current_file = None
-    current_line = 0
-    start_line = None
-    end_line = None
-    in_hunk = False
-
-    def finalize_block():
-        nonlocal start_line, end_line
-        if current_file and start_line is not None and end_line is not None:
-            raw = f"{current_file}:L{start_line}-L{end_line}"
-            locations.append({'file_path': current_file, 'start_line': start_line, 'end_line': end_line, 'raw': raw})
-        start_line = end_line = None
-
+    original_line = 0
+    new_line = 0
+    
     for line in patch.splitlines():
         # File path
-        if line.startswith(("--- ", "+++ ")):
+        if line.startswith("--- "):
             file_path = line[4:]
             if file_path.startswith(("a/", "b/")):
                 file_path = file_path[2:]
@@ -316,25 +307,48 @@ def extract_locations_from_patch(patch: str) -> List[Dict[str, Any]]:
 
         # Hunk header
         elif line.startswith("@@ "):
-            finalize_block()
-            m = re.match(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@", line)
+            # Parse: @@ -original_start[,original_count] +new_start[,new_count] @@
+            m = re.match(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@", line)
             if m:
-                new_start = int(m.group(1))
-                current_line = new_start
-                start_line = end_line = None
-                in_hunk = True
+                original_line = int(m.group(1))
+                new_line = int(m.group(3))
 
-        elif in_hunk:
-            if line.startswith("+") and not line.startswith("+++"):
-                if start_line is None:
-                    start_line = current_line
-                end_line = current_line
-                current_line += 1
+        elif current_file and line:
+            # Track changes in original file
+            if line.startswith("-") and not line.startswith("---"):
+                # Line removed from original - this is a change location
+                locations.append({
+                    'file_path': current_file, 
+                    'start_line': original_line, 
+                    'end_line': original_line, 
+                    'raw': f"{current_file}:L{original_line}-L{original_line}"
+                })
+                original_line += 1
+            elif line.startswith("+") and not line.startswith("+++"):
+                # Line added - if previous line wasn't a removal, this is a pure addition
+                # The location in original file is where it would be inserted
+                if not locations or locations[-1]['end_line'] != original_line - 1:
+                    # Pure addition at current position in original
+                    locations.append({
+                        'file_path': current_file, 
+                        'start_line': original_line, 
+                        'end_line': original_line, 
+                        'raw': f"{current_file}:L{original_line}-L{original_line}"
+                    })
+                new_line += 1
             else:
-                # leaving an added block
-                finalize_block()
-                if not line.startswith("-"):
-                    current_line += 1
+                # Context line - advances both counters
+                original_line += 1
+                new_line += 1
 
-    finalize_block()
-    return locations
+    # Merge adjacent locations
+    merged = []
+    for loc in locations:
+        if merged and loc['file_path'] == merged[-1]['file_path'] and loc['start_line'] <= merged[-1]['end_line'] + 1:
+            # Extend the previous location
+            merged[-1]['end_line'] = max(merged[-1]['end_line'], loc['end_line'])
+            merged[-1]['raw'] = f"{merged[-1]['file_path']}:L{merged[-1]['start_line']}-L{merged[-1]['end_line']}"
+        else:
+            merged.append(loc)
+    
+    return merged

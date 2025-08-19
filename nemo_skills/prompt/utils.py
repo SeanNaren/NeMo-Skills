@@ -351,6 +351,96 @@ class Prompt:
         return str(self.config)
 
 
+def get_config_path(config: str, config_dir: str | None = None, config_extension: str = "yaml") -> Path:
+    if config_dir is None:
+        config_dir = str(Path(__file__).parent.absolute() / 'config')
+
+    if config.endswith(f".{config_extension}"):
+        config_path = Path(config).absolute()
+    elif config.startswith("nemo_skills"):
+        config_path = Path(__file__).parents[2].absolute() / f"{config}.{config_extension}"
+    else:
+        config_path = Path(config_dir) / f"{config}.{config_extension}"
+
+    return config_path
+
+
+
+def validate_yaml_literal_blocks(content: str, config_path: Path) -> None:
+    """
+    Validates that single curly braces in YAML literal block scalars are properly escaped.
+    
+    In YAML literal blocks (|, |-, |+), single curly braces must be doubled
+    because they have special meaning in Python string formatting.
+    
+    Args:
+        content (str): The YAML file content to validate.
+        config_path (Path): Path to the config file (for error reporting).
+        
+    Raises:
+        ValueError: If single curly braces are found in literal block scalars.
+    """
+    # This regex finds single { or } that are not part of {{ or }}
+    single_brace_pattern = r'(?<!{){(?!{)|(?<!})}(?!})'
+    
+    # Pattern to match a key followed by | (with optional -, +) for literal blocks
+    # This covers |, |-, |+, etc.
+    literal_block_pattern = r'^(\s*)(\w+):\s*\|[+-]?\s*$'
+    
+    lines = content.split('\n')
+    lines_with_issues = []
+    i = 0
+    
+    while i < len(lines):
+        line = lines[i]
+        match = re.match(literal_block_pattern, line)
+        
+        if match:
+            # Found a literal block scalar
+            indent = len(match.group(1))
+            key = match.group(2)
+            block_start = i + 1
+            
+            # Find the end of the literal block by looking for a line with same or less indentation
+            block_lines = []
+            j = block_start
+            while j < len(lines):
+                if lines[j].strip() == '':  # Empty lines are part of the block
+                    block_lines.append(lines[j])
+                elif len(lines[j]) - len(lines[j].lstrip()) <= indent:
+                    # Found a line with same or less indentation, block ends
+                    break
+                else:
+                    block_lines.append(lines[j])
+                j += 1
+            
+            # Check the block content for single braces
+            block_content = '\n'.join(block_lines)
+            if re.search(single_brace_pattern, block_content):
+                # Report issues line by line within the block
+                for k, block_line in enumerate(block_lines):
+                    if re.search(single_brace_pattern, block_line):
+                        actual_line_num = block_start + k + 1  # +1 for 1-based line numbers
+                        lines_with_issues.append(f"  Line {actual_line_num} (in '{key}' block): {block_line.strip()}")
+            
+            # Skip to the end of the block
+            i = j - 1
+        
+        i += 1
+    
+    if lines_with_issues:
+        error_msg = (
+            f"ERROR: Single curly braces found in literal block scalars in: {config_path}\n"
+            f"In YAML literal blocks (|, |-, |+), curly braces must be doubled to escape them.\n"
+            f"Replace '{{' with '{{{{' and '}}' with '}}}}' in the following lines:\n" +
+            '\n'.join(lines_with_issues[:10])  # Show max 10 lines
+        )
+        if len(lines_with_issues) > 10:
+            error_msg += f"\n  ... and {len(lines_with_issues) - 10} more lines"
+        
+        raise ValueError(error_msg)
+
+
 def load_config(config: str, config_dir: str | None = None) -> dict:
     """
     Reads the prompt config/template from the yaml file.
@@ -365,18 +455,14 @@ def load_config(config: str, config_dir: str | None = None) -> dict:
     Returns:
         The loaded dictionary.
     """
-    if config_dir is None:
-        config_dir = str(Path(__file__).parent.absolute() / 'config')
-
-    if config.endswith(".yaml"):
-        config_path = Path(config).absolute()
-    elif config.startswith("nemo_skills"):
-        config_path = Path(__file__).parents[2].absolute() / f"{config}.yaml"
-    else:
-        config_path = Path(config_dir) / f"{config}.yaml"
+    config_path = get_config_path(config, config_dir)
 
     with open(config_path, "rt", encoding="utf-8") as fin:
-        return yaml.safe_load(fin)
+        content = fin.read()    
+    validate_yaml_literal_blocks(content, config_path)
+
+    return yaml.safe_load(content)
+
 
 
 def get_prompt(
