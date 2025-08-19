@@ -55,7 +55,7 @@ class LocalAgentGenerationConfig(GenerateSolutionsConfig):
     # Agent behavior settings
     mount_directory: str = "/repos/"  # Directory where repositories are mounted
     remove_thinking: bool = True  # Whether to strip thinking tags from output
-    total_steps: int = 20  # Maximum number of agent steps per problem
+    total_steps: int = 7  # Maximum number of agent steps per problem
     
     # Repository filtering settings
     file_extensions: list = field(default_factory=lambda: ["py"])  # File types to include in repo
