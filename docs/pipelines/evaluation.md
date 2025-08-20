@@ -151,8 +151,7 @@ Here is an example evaluation command for ruler that uses data_dir parameter
 from nemo_skills.pipeline.cli import eval, wrap_arguments
 
 eval(
-    # using a low number of concurrent requests since it's almost entirely prefill stage
-    ctx=wrap_arguments("++max_concurrent_requests=32"),
+    ctx=wrap_arguments(""),
     cluster="slurm",
     model="/hf_models/Meta-Llama-3.1-8B-Instruct",
     server_type="sglang",
@@ -182,11 +181,10 @@ Inside [nemo_skills/dataset/gsm8k/\_\_init\_\_.py](https://github.com/NVIDIA/NeM
 
 ```python
 # settings that define how evaluation should be done by default (all can be changed from cmdline)
-PROMPT_CONFIG = 'generic/math'
 DATASET_GROUP = 'math'
 METRICS_TYPE = "math"
 EVAL_ARGS = "++eval_type=math"
-GENERATION_ARGS = ""
+GENERATION_ARGS = "++prompt_config=generic/math"
 ```
 
 The prompt config and default generation arguments are passed to the

@@ -40,12 +40,11 @@ ns prepare_data comp-math-24-25 hle
 ns eval \
     --cluster=local \
     --model=/workspace/OpenMath-Nemotron-1.5B \
-    --server_type=trtllm \
+    --server_type=sglang \
     --output_dir=/workspace/openmath-nemotron-1.5b-eval-cot \
     --benchmarks=comp-math-24-25:64 \
     --server_gpus=1 \
     --num_jobs=1 \
-    ++prompt_template=qwen-instruct \
     ++prompt_config=generic/math \
     ++inference.tokens_to_generate=32768 \
     ++inference.temperature=0.6
@@ -53,13 +52,12 @@ ns eval \
 ns eval \
     --cluster=local \
     --model=/workspace/OpenMath-Nemotron-1.5B \
-    --server_type=trtllm \
+    --server_type=sglang \
     --output_dir=/workspace/openmath-nemotron-1.5b-eval-cot \
     --benchmarks=hle:64 \
     --server_gpus=1 \
     --num_jobs=1 \
     --split=math \
-    ++prompt_template=qwen-instruct \
     ++prompt_config=generic/math \
     ++inference.tokens_to_generate=32768 \
     ++inference.temperature=0.6
@@ -86,7 +84,7 @@ ns generate \
     --generation_type=math_judge \
     --cluster=local \
     --model=/hf_models/Qwen2.5-32B-Instruct \
-    --server_type=trtllm \
+    --server_type=sglang \
     --server_gpus=4 \
     --output_dir=/workspace/openmath-nemotron-1.5b-eval-cot/eval-results-judged/hle \
     --input_dir=/workspace/openmath-nemotron-1.5b-eval-cot/eval-results/hle
@@ -122,15 +120,15 @@ To get TIR evaluation numbers, replace the generation commands like this
 ns eval \
     --cluster=local \
     --model=/workspace/OpenMath-Nemotron-1.5B \
-    --server_type=trtllm \
+    --server_type=sglang \
     --output_dir=/workspace/openmath-nemotron-1.5b-eval-tir \
     --benchmarks=comp-math-24-25:64 \
     --server_gpus=1 \
     --num_jobs=1 \
     --with_sandbox \
     ++code_tags=openmath \
-    ++prompt_template=qwen-instruct \
     ++prompt_config=openmath/tir \
+    ++use_completions_api=True \
     ++inference.tokens_to_generate=32768 \
     ++inference.temperature=0.6 \
     ++code_execution=true \
@@ -144,16 +142,16 @@ you should use the following options instead
 ```bash
 ns eval \
     --cluster=local \
-    --model=/workspace/openmath-nemotron-14b-kaggle-trtllm \
-    --server_type=trtllm \
+    --model=/workspace/OpenMath-Nemotron-14B-Kaggle \
+    --server_type=sglang \
     --output_dir=/workspace/openmath-nemotron-14b-kaggle-eval-tir \
     --benchmarks=comp-math-24-25:64 \
     --server_gpus=1 \
     --num_jobs=1 \
     --with_sandbox \
     ++code_tags=openmath \
-    ++prompt_template=qwen-instruct \
     ++prompt_config=generic/math \
+    ++use_completions_api=True \
     ++inference.tokens_to_generate=32768 \
     ++inference.temperature=0.6 \
     ++code_execution=true
@@ -170,10 +168,9 @@ Here is a sample command to run GenSelect evaluation:
 ns genselect \
     --preprocess_args="++input_dir=/workspace/openmath-nemotron-1.5b-eval-cot/eval-results-judged/hle" \
     --model=/trt_models/openmath-nemotron-1.5b \
-    ++prompt_template=qwen-instruct \
     --output_dir=/workspace/openmath-nemotron-1.5b-eval-cot/self_genselect_hle \
     --cluster=local \
-    --server_type=trtllm \
+    --server_type=sglang \
     --server_gpus=1 \
     --num_random_seeds=64
 ```

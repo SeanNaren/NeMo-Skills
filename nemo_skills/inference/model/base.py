@@ -57,6 +57,7 @@ class BaseModel:
         ssh_key_path: str | None = None,
     ):
         self._tunnel = None
+        self.model_name_or_path = model
         self.server_host = host
         self.server_port = port
         self.ssh_server = ssh_server

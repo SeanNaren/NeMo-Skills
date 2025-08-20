@@ -187,6 +187,7 @@ def get_executor(
             ipc_mode="host",
             volumes=mounts,
             ntasks_per_node=1,
+            privileged=bool(os.getenv('NEMO_SKILLS_PRIVILEGED_DOCKER', 0)),
             # locally we are always asking for all GPUs to be able to select a subset with CUDA_VISIBLE_DEVICES
             num_gpus=-1 if gpus_per_node is not None else None,
             network="host",
@@ -470,7 +471,7 @@ def add_task(
                         heterogeneous=heterogeneous,
                         het_group=het_group,
                         total_het_groups=total_het_groups,
-                        overlap=server_config is not None,
+                        overlap=(server_config is not None) or with_sandbox,
                         with_ray=with_ray,
                     )
                 )
@@ -508,7 +509,7 @@ def add_task(
                 heterogeneous=heterogeneous,
                 het_group=het_group,
                 total_het_groups=total_het_groups,
-                overlap=server_config is not None,
+                overlap=True,
                 with_ray=with_ray,
             )
             executors.append(sandbox_executor)
@@ -633,3 +634,14 @@ def get_exp(expname, cluster_config, _reuse_exp=None):
     if cluster_config['executor'] == 'local':
         return run.Experiment(expname, clean_mode=True)
     return run.Experiment(expname, clean_mode=True, log_level="WARN")
+
+
+def get_nsight_cmd(profile_step_range):
+    cmd = ''
+    if profile_step_range is not None:
+        cmd = (
+            f'export LD_LIBRARY_PATH="/usr/local/cuda/lib64:/usr/local/cuda/lib:/usr/local/nvidia/lib64:/usr/local/nvidia/lib:/usr/lib/x86_64-linux-gnu" && '
+            f"export NRL_NSYS_PROFILE_STEP_RANGE={profile_step_range} && "
+            'export NRL_NSYS_WORKER_PATTERNS="*policy*,*vllm*" && '
+        )
+    return cmd
