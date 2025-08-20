@@ -1,0 +1,23 @@
+
+system: "You are ChatGPT, a large language model trained by OpenAI.
+  Knowledge cutoff: 2024-06
+  Current date: 2025-08-08
+
+  Reasoning: high
+
+  # Tools
+
+  # Valid channels: analysis, commentary, final. Channel must be included for every message."
+
+user: |-
+  You are a competitive programmer. You are given a problem, list of test scripts and the execution output from a test file using a proposed solution. 
+  
+  Select the test script that provides the most useful information for improving the proposed solution by looking at the execution output.
+
+  The final improved solution should be the index of the test script that wrapped in \\boxed{}.
+
+  ## Problem
+  {question}
+  
+  ## Test Scripts
+  {test_scripts}

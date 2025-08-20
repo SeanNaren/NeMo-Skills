@@ -58,7 +58,7 @@ def extract_test_input(text: str):
 class IOIExecutionConfig(GenerateSolutionsConfig):
     inference: InferenceConfig = field(default_factory=InferenceConfig)
     server: dict = field(default_factory=dict)
-    prompt_config: str = "generic/default"
+    prompt_config: str = "eval/ioi/codegen"
     improve_prompt_config: str = "eval/ioi/codegen_improve"
     test_prompt_config: str = "eval/ioi/codegen_tests"
     llm_select_test: bool = True
