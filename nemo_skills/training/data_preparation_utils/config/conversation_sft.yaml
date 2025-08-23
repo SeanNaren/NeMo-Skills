@@ -1,0 +1,50 @@
+processors_to_run: all
+
+output_path: ???
+input_files: null  # Path to JSONL files with conversation data
+
+# Tokenizer for metrics calculation and chat template formatting
+tokenizer_name: "Qwen/Qwen2.5-32B-Instruct"
+calculate_metrics: true
+
+# Debug settings for faster iteration
+debug_mode: false  # Set to true to process only first file with single worker
+max_samples_per_file: null  # Set to limit samples per file (e.g., 5 for debugging)
+
+# Custom tokens for structured output
+add_custom_tokens: true  # Add <tool_call>, </tool_call>, <locations>, </locations> tokens
+
+# Multiprocessing settings
+num_workers: null  # null = auto-detect (min of 32 and CPU count)
+
+# Standard parameters
+random_seed: 42
+do_shuffle: true
+num_output_samples: null
+
+# We don't need prompt formatting since our processor handles it
+prompt_config: null
+prompt_template: null
+exclude_optional_keys: false
+
+processors:
+  # Our custom processor that handles conversation data
+  - _target_: nemo_skills.training.data_preparation_utils.preprocessing.ConversationDataProcessor
+    input_files: ${input_files}
+    calculate_metrics: ${calculate_metrics}
+    tokenizer_name: ${tokenizer_name}
+    debug_mode: ${debug_mode}
+    max_samples_per_file: ${max_samples_per_file}
+    num_workers: ${num_workers}
+    prompt_config: ${prompt_config}
+    add_custom_tokens: ${add_custom_tokens}
+    output_manifest_file: ${output_path}
+  
+  # Optional: Shuffle and downsample if needed (disabled in debug mode since ConversationDataProcessor outputs individual samples, not grouped)
+  - _target_: nemo_skills.training.data_preparation_utils.preprocessing.ShuffleAndDownsampleData
+    should_run: false  # Disabled - ConversationDataProcessor outputs individual samples, not grouped samples
+    num_samples: ${num_output_samples}
+    sampling_method: null  # Can be 'random' or 'fair' if num_samples is set
+    random_seed: ${random_seed}
+    do_shuffle: ${do_shuffle}
+    output_manifest_file: ${output_path}

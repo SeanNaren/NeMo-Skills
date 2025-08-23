@@ -361,6 +361,14 @@ def tokenize_dataset(cfg: 'DictConfig'):
     else:
         tokenizer = get_nmt_tokenizer(library="sentencepiece", tokenizer_model=cfg.tokenizer_path)
 
+    custom_tokens = ["<tool_call>", "</tool_call>", "<locations>", "</locations>"]
+    num_added_tokens = tokenizer.add_tokens(custom_tokens)
+    if num_added_tokens > 0:
+        logging.info(f"Added {num_added_tokens} custom tokens to tokenizer: {custom_tokens}")
+    else:
+        logging.info("Custom tokens already present in tokenizer")
+                    
+
     dataset = GPTSFTDataset(
         file_path=data_cfg.file_names[0],
         tokenizer=tokenizer,
