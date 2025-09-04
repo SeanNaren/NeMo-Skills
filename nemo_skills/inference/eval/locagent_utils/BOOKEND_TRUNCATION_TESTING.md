@@ -8,7 +8,7 @@ To test if the bookend truncation strategy reproduces the good results from fail
 
 In `locagent.py`, add:
 ```python
-from nemo_skills.inference.eval.bookend_truncation import bookend_truncate_dialogue_history
+from nemo_skills.inference.eval.locagent_utils.bookend_truncation import bookend_truncate_dialogue_history
 ```
 
 ### 2. Replace Truncation Method
@@ -85,7 +85,7 @@ Based on the analysis, bookend truncation should:
 If bookend works well, try the hybrid approach:
 ```python
 # Use smart_bookend_truncate for adaptive behavior
-from nemo_skills.inference.eval.bookend_truncation import smart_bookend_truncate
+from nemo_skills.inference.eval.locagent_utils.bookend_truncation import smart_bookend_truncate
 
 data_point['turns'] = smart_bookend_truncate(
     data_point['turns'], self.cfg.max_seq_length, self.cfg.tokens_to_generate
@@ -102,7 +102,7 @@ This will:
 Enable detailed logging to see what's happening:
 ```python
 import logging
-logging.getLogger('nemo_skills.inference.eval.bookend_truncation').setLevel(logging.DEBUG)
+logging.getLogger('nemo_skills.inference.eval.locagent_utils.bookend_truncation').setLevel(logging.DEBUG)
 ```
 
 This will show:
