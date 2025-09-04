@@ -136,16 +136,41 @@ def main():
         logging.info(f"Saving {k} to {ckpt_name}")
         input_arr = avg_weights[k]
         chunks = chunk_info[k]
+        zarr_path = os.path.join(ckpt_name, k)
+        
+        # Remove existing zarr array if it exists to avoid ContainsArrayError
+        if os.path.exists(zarr_path):
+            logging.info(f"  🧹 Removing existing zarr array at {zarr_path}")
+            shutil.rmtree(zarr_path)
+        
         # create the zarr array
-        output_array = zarr.create(
-            input_arr.shape,
-            dtype=input_arr.dtype,
-            store=os.path.join(ckpt_name, k),
-            chunks=chunks,
-            compressor=None,
-            fill_value=None,
-            write_empty_chunks=True,
-        )
+        try:
+            output_array = zarr.create(
+                input_arr.shape,
+                dtype=input_arr.dtype,
+                store=zarr_path,
+                chunks=chunks,
+                compressor=None,
+                fill_value=None,
+                write_empty_chunks=True,
+            )
+            logging.info(f"  ✅ Created zarr array for {k}")
+        except zarr.errors.ContainsArrayError as e:
+            logging.error(f"  ❌ ContainsArrayError for {k}: {e}")
+            logging.info(f"  🔄 Attempting to overwrite existing array...")
+            # Try to remove and recreate
+            if os.path.exists(zarr_path):
+                shutil.rmtree(zarr_path)
+            output_array = zarr.create(
+                input_arr.shape,
+                dtype=input_arr.dtype,
+                store=zarr_path,
+                chunks=chunks,
+                compressor=None,
+                fill_value=None,
+                write_empty_chunks=True,
+            )
+            logging.info(f"  ✅ Successfully recreated zarr array for {k}")
         if input_arr.dtype == np.dtype("bfloat16"):
             arr = output_array
             arr._dtype = input_arr.dtype

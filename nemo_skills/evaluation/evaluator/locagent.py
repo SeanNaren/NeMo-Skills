@@ -389,7 +389,38 @@ def eval_metrics(eval_config, locagent_data):
     failed_samples = 0
     skipped_samples = 0
     
-    for elem_idx, elem in enumerate(locagent_data):        
+    # Track ground truth presence in pruned repos
+    ground_truth_percentages = []
+    missing_files_by_reason = {
+        'filtered_by_extension': {},
+        'filtered_by_directory': {},
+        'not_in_repository': []
+    }
+    
+    for elem_idx, elem in enumerate(locagent_data):
+        # Collect ground truth in repo percentage if available
+        if 'ground_truth_in_repo_percentage' in elem:
+            ground_truth_percentages.append(elem['ground_truth_in_repo_percentage'])
+        
+        # Collect missing files details
+        if 'missing_ground_truth_files' in elem:
+            for missing_file in elem['missing_ground_truth_files']:
+                reason = missing_file['reason']
+                file_path = missing_file['file']
+                
+                if reason == 'filtered_by_extension':
+                    ext = missing_file.get('extension', 'unknown')
+                    if ext not in missing_files_by_reason['filtered_by_extension']:
+                        missing_files_by_reason['filtered_by_extension'][ext] = []
+                    missing_files_by_reason['filtered_by_extension'][ext].append(file_path)
+                elif reason == 'filtered_by_directory':
+                    excluded_dir = missing_file.get('excluded_dir', 'unknown')
+                    if excluded_dir not in missing_files_by_reason['filtered_by_directory']:
+                        missing_files_by_reason['filtered_by_directory'][excluded_dir] = []
+                    missing_files_by_reason['filtered_by_directory'][excluded_dir].append(file_path)
+                elif reason == 'not_in_repository':
+                    missing_files_by_reason['not_in_repository'].append(file_path)
+        
         if elem["status"] == "skipped":
             skipped_samples += 1
             # Assign zero metrics to skipped samples
@@ -446,6 +477,23 @@ def eval_metrics(eval_config, locagent_data):
         #     json_content = locagent_data[json_idx[instance_id]]
         #     tasks.append((eval_config, elem_idx, full_generation, json_content, subtask_step))
 
+    # Calculate ground truth presence statistics
+    ground_truth_stats = {}
+    if ground_truth_percentages:
+        import numpy as np
+        gt_array = np.array(ground_truth_percentages)
+        ground_truth_stats = {
+            "mean_percentage": float(np.mean(gt_array)),
+            "min_percentage": float(np.min(gt_array)),
+            "max_percentage": float(np.max(gt_array)),
+            "median_percentage": float(np.median(gt_array)),
+            "std_percentage": float(np.std(gt_array)),
+            "samples_with_100_percent": int(np.sum(gt_array == 100.0)),
+            "samples_with_0_percent": int(np.sum(gt_array == 0.0)),
+            "samples_with_partial": int(np.sum((gt_array > 0.0) & (gt_array < 100.0))),
+            "total_samples_with_data": len(ground_truth_percentages)
+        }
+    
     # Log processing statistics
     total_samples = len(locagent_data)
     LOG.info(f"Processing statistics:")
@@ -455,13 +503,60 @@ def eval_metrics(eval_config, locagent_data):
     LOG.info(f"  Skipped samples: {skipped_samples}")
     LOG.info(f"  Success rate: {(successful_samples / total_samples * 100):.1f}%")
     
+    if ground_truth_stats:
+        LOG.info(f"\nGround truth presence in pruned repos:")
+        LOG.info(f"  Mean: {ground_truth_stats['mean_percentage']:.1f}%")
+        LOG.info(f"  Median: {ground_truth_stats['median_percentage']:.1f}%")
+        LOG.info(f"  Min: {ground_truth_stats['min_percentage']:.1f}%")
+        LOG.info(f"  Max: {ground_truth_stats['max_percentage']:.1f}%")
+        LOG.info(f"  Std Dev: {ground_truth_stats['std_percentage']:.1f}%")
+        LOG.info(f"  Samples with 100% GT files: {ground_truth_stats['samples_with_100_percent']}")
+        LOG.info(f"  Samples with 0% GT files: {ground_truth_stats['samples_with_0_percent']}")
+        LOG.info(f"  Samples with partial GT files: {ground_truth_stats['samples_with_partial']}")
+    
+    # Log missing ground truth files by reason
+    LOG.info(f"\n=== MISSING GROUND TRUTH FILES REPORT ===")
+    
+    # Files filtered by extension
+    if missing_files_by_reason['filtered_by_extension']:
+        LOG.info(f"\nFiles filtered by extension:")
+        for ext, files in sorted(missing_files_by_reason['filtered_by_extension'].items()):
+            LOG.info(f"  Extension '{ext}': {len(files)} files")
+            for f in sorted(files)[:5]:  # Show first 5 examples
+                LOG.info(f"    - {f}")
+            if len(files) > 5:
+                LOG.info(f"    ... and {len(files) - 5} more")
+    
+    # Files filtered by directory
+    if missing_files_by_reason['filtered_by_directory']:
+        LOG.info(f"\nFiles filtered by excluded directory:")
+        for dir_name, files in sorted(missing_files_by_reason['filtered_by_directory'].items()):
+            LOG.info(f"  Directory '{dir_name}': {len(files)} files")
+            for f in sorted(files)[:5]:  # Show first 5 examples
+                LOG.info(f"    - {f}")
+            if len(files) > 5:
+                LOG.info(f"    ... and {len(files) - 5} more")
+    
+    # Files not in repository
+    if missing_files_by_reason['not_in_repository']:
+        LOG.info(f"\nFiles not found in repository (may be missing from dataset):")
+        LOG.info(f"  Total: {len(missing_files_by_reason['not_in_repository'])} files")
+        for f in sorted(missing_files_by_reason['not_in_repository'])[:10]:  # Show first 10
+            LOG.info(f"    - {f}")
+        if len(missing_files_by_reason['not_in_repository']) > 10:
+            LOG.info(f"    ... and {len(missing_files_by_reason['not_in_repository']) - 10} more")
+    
+    LOG.info(f"\n=== END MISSING FILES REPORT ===")
+    
     # Store processing statistics to be included in metrics
     processing_stats = {
         "total_samples": total_samples,
         "successful_samples": successful_samples, 
         "failed_samples": failed_samples,
         "skipped_samples": skipped_samples,
-        "success_rate": (successful_samples / total_samples * 100) if total_samples > 0 else 0.0
+        "success_rate": (successful_samples / total_samples * 100) if total_samples > 0 else 0.0,
+        "ground_truth_presence_stats": ground_truth_stats,
+        "missing_files_by_reason": missing_files_by_reason
     }
 
     # Execute tasks in parallel

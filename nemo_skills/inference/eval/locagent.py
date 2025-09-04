@@ -12,23 +12,26 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import copy
+import importlib
 import logging
 import pickle
 import sys
-from pathlib import Path
 from dataclasses import field
+from pathlib import Path
 
 import hydra
-import openai
 
-from nemo_skills.inference.eval.locagent_utils.utils import tree_repo_dict, filter_repo_dict
+import openai
+from nemo_skills.inference.eval.locagent_utils.utils import (calculate_ground_truth_percentage,
+                                                             extract_locations_from_patch, filter_repo_dict,
+                                                             tree_repo_dict)
 from nemo_skills.inference.generate import GenerateSolutionsConfig, GenerationTask, InferenceConfig
 from nemo_skills.inference.model import server_params
 from nemo_skills.utils import get_help_message, get_logger_name, nested_dataclass, remove_thinking, setup_logging
 
-PROMPT_TEMPLATE_VERSION: str = "v5"  # Template version for prompts
+PROMPT_TEMPLATE_VERSION: str = "v4"
 
-import importlib
 
 module_base = f"nemo_skills.inference.eval.locagent_utils.{PROMPT_TEMPLATE_VERSION}"
 
@@ -37,13 +40,10 @@ tool_executor = importlib.import_module(f"{module_base}.tool_executor")
 
 DialogProcessor = dialog_processor.DialogProcessor
 ToolExecutor = tool_executor.ToolExecutor
+# Import only the token management functions we need from dialog_processor
+truncate_dialogue_history = dialog_processor.truncate_dialogue_history
 
 LOG = logging.getLogger(get_logger_name(__file__))
-
-
-tool_call_template = """
-
-"""
 
 
 @nested_dataclass(kw_only=True)
@@ -51,14 +51,14 @@ class LocalAgentGenerationConfig(GenerateSolutionsConfig):
     # Core inference settings
     inference: InferenceConfig = field(default_factory=InferenceConfig)  # LLM call parameters
     server: dict = field(default_factory=dict)  # Server configuration for model hosting
-    
+
     # Agent behavior settings
     mount_directory: str = "/repos/"  # Directory where repositories are mounted
     remove_thinking: bool = True  # Whether to strip thinking tags from output
-    total_steps: int = 5  # Maximum number of agent steps per problem
-    
+    total_steps: int = 20  # Maximum number of agent steps per problem
+
     # Repository filtering settings
-    file_extensions: list = field(default_factory=lambda: ["py"])  # File types to include in repo
+    file_extensions: list = field(default_factory=lambda: ["py", "cfg"])  # File types to include in repo
     exclude_dirs: list = field(  # Directory names to exclude from repository analysis
         default_factory=lambda: [
             "test",
@@ -73,8 +73,8 @@ class LocalAgentGenerationConfig(GenerateSolutionsConfig):
             "examples",
             "scripts",
             "tools",
-            "utils",
-            "migrations",
+            # "utils",  # Removed - too many legitimate utility files
+            # "migrations",  # Removed - Django migrations contain bug fixes
             "venv",
             "env",
             "node_modules",
@@ -100,11 +100,11 @@ class LocalAgentGenerationConfig(GenerateSolutionsConfig):
             "temp",
             "cache",
             "vendor",
-            "lib",
+            # "lib",  # Removed - matplotlib's main source directory!
             "libs",
             "dependencies",
-            "config",
-            "conf",
+            # "config",  # Removed - configuration files often have bugs
+            # "conf",    # Removed - configuration files often have bugs
             "settings",
             "local_settings",
             "fixtures",
@@ -128,23 +128,80 @@ class LocalAgentGenerationConfig(GenerateSolutionsConfig):
             "contributing",
         ]
     )
-    
+
     # Tool detection and search settings
     enable_implicit_tool_detection: bool = True  # Enable fallback tool detection when no explicit calls found
     common_words_filter: list = field(  # Words to filter out when detecting implicit search queries
         default_factory=lambda: [
-            "the", "and", "or", "but", "in", "on", "at", "to", "for", "of", "with", "by",
-            "is", "are", "was", "were", "be", "been", "have", "has", "had",
-            "do", "does", "did", "will", "would", "could", "should", "may", "might", "can",
-            "this", "that", "these", "those", "a", "an", "as", "if", "then", "else",
-            "when", "where", "why", "how", "what", "which", "who", "whom", "whose",
-            "need", "find", "search", "look", "function", "class", "method", "variable", "query"
+            "the",
+            "and",
+            "or",
+            "but",
+            "in",
+            "on",
+            "at",
+            "to",
+            "for",
+            "of",
+            "with",
+            "by",
+            "is",
+            "are",
+            "was",
+            "were",
+            "be",
+            "been",
+            "have",
+            "has",
+            "had",
+            "do",
+            "does",
+            "did",
+            "will",
+            "would",
+            "could",
+            "should",
+            "may",
+            "might",
+            "can",
+            "this",
+            "that",
+            "these",
+            "those",
+            "a",
+            "an",
+            "as",
+            "if",
+            "then",
+            "else",
+            "when",
+            "where",
+            "why",
+            "how",
+            "what",
+            "which",
+            "who",
+            "whom",
+            "whose",
+            "need",
+            "find",
+            "search",
+            "look",
+            "function",
+            "class",
+            "method",
+            "variable",
+            "query",
         ]
     )
-    
+
     # Display settings
     show_line_counts: bool = False  # Show file line counts in repository tree output
-    max_view_lines: int = 1000  # Maximum lines to show in view tool (0 = no limit)
+    max_view_lines: int = 1000  # Maximum lines to show in view tool (0 = no limit) - reduced from 1000 to 300
+
+    # Context management settings
+    max_seq_length: int = 32768  # Maximum context length in tokens (adjust based on your model)
+    tokens_to_generate: int = 8192  # Tokens to reserve for model response
 
 
 cs = hydra.core.config_store.ConfigStore.instance()
@@ -161,31 +218,87 @@ class LocAgentGenerationTask(GenerationTask):
 
     async def process_single_datapoint(self, data_point, all_data):
         """Will do all necessary generations to get a single answer for the data point."""
+
+        # Log initial state of data_point for debugging
+        LOG.debug(
+            f"Initial data_point keys: {list(data_point.keys()) if isinstance(data_point, dict) else 'not a dict'}"
+        )
+        if 'turns' in data_point:
+            LOG.debug(f"Initial turns structure: {data_point['turns']}")
+
         # Filter out samples with empty problem statements
         if not data_point.get('problem_statement', '').strip():
-            LOG.warning(f"Skipping data point {data_point.get('instance_id', 'unknown')} due to empty problem statement")
+            LOG.warning(
+                f"Skipping data point {data_point.get('instance_id', 'unknown')} due to empty problem statement"
+            )
             return {
                 'generation': [],
                 'total_generated_tokens': 0,
                 'num_turns': 0,
                 'status': 'skipped',
                 'reason': 'empty_problem_statement',
+                'turns': [],  # Include empty turns array for consistency
             }
-        
+
         total_steps = self.cfg.total_steps
         chat_history = []
-
         total_generated_tokens = 0
-        instance_filepath = Path(self.cfg.mount_directory).joinpath(f"{data_point['instance_id']}.pkl")
 
-        # repo_dict is dict with 'structure' containing the actual repo tree dict_keys(['repo', 'base_commit',
-        # 'structure', 'instance_id'])
-        with open(instance_filepath, 'rb') as f:
-            repo_dict = pickle.load(f)
-        repo_dict = filter_repo_dict(repo_dict, self.cfg.exclude_dirs, self.cfg.file_extensions)
-        tree_structure = tree_repo_dict(repo_dict, self.cfg.show_line_counts)
+        # Initialize or fix turns structure early to ensure it always exists with proper fields
+        if 'turns' in data_point and isinstance(data_point['turns'], list) and len(data_point['turns']) > 0:
+            # Ensure existing turns have all required fields
+            for i, turn in enumerate(data_point['turns']):
+                if isinstance(turn, dict):
+                    # Add missing fields with default values
+                    turn.setdefault('inputs', '')
+                    turn.setdefault('assistant', '')
+                    turn.setdefault('tool_call', None)
+                    turn.setdefault('tool_output', '')
+                    LOG.debug(
+                        f"Turn {i} after setdefault - keys: {list(turn.keys())}, has assistant: {'assistant' in turn}"
+                    )
+                else:
+                    # Replace non-dict turn with proper structure
+                    LOG.warning(f"Found non-dict turn at index {i}: {type(turn)}, replacing with empty structure")
+                    data_point['turns'][i] = {"inputs": "", "assistant": "", "tool_call": None, "tool_output": ""}
+        else:
+            # Initialize new turns structure
+            data_point['turns'] = [{"inputs": "", "assistant": "", "tool_call": None, "tool_output": ""}]
 
-        inputs = f"""
+        try:
+            instance_filepath = Path(self.cfg.mount_directory).joinpath(f"{data_point['instance_id']}.pkl")
+
+            # repo_dict is dict with 'structure' containing the actual repo tree dict_keys(['repo', 'base_commit',
+            # 'structure', 'instance_id'])
+            with open(instance_filepath, 'rb') as f:
+                repo_dict = pickle.load(f)
+            repo_dict = filter_repo_dict(repo_dict, self.cfg.exclude_dirs, self.cfg.file_extensions)
+            tree_structure = tree_repo_dict(repo_dict, self.cfg.show_line_counts)
+
+            # Calculate ground truth files percentage using utility function
+            ground_truth_in_repo_percentage = 0.0
+            if 'patch' in data_point and data_point['patch']:
+                try:
+                    # Extract file paths from patch
+                    locations = extract_locations_from_patch(data_point['patch'])
+
+                    # Use utility function to calculate percentage
+                    ground_truth_in_repo_percentage, debug_info = calculate_ground_truth_percentage(
+                        repo_dict, locations, self.cfg.exclude_dirs, self.cfg.file_extensions
+                    )
+
+                    # Log debug info if needed
+                    LOG.debug(f"Ground truth check debug info: {debug_info}")
+                    
+                    # Store missing files info for aggregation
+                    data_point['_missing_ground_truth_files'] = debug_info.get('missing_files_details', [])
+
+                except Exception as e:
+                    LOG.warning(f"Error checking ground truth files: {e}")
+
+            data_point['_ground_truth_in_repo_percentage'] = ground_truth_in_repo_percentage
+
+            inputs = f"""
 ### Problem Description
 {data_point["problem_statement"]}
 
@@ -193,20 +306,60 @@ class LocAgentGenerationTask(GenerationTask):
 {tree_structure}
 """
 
-        data_point['turns'] = [{"inputs": inputs}]
+            # Update the first turn with actual content
+            data_point['turns'][0]['inputs'] = inputs
+            LOG.debug(f"Initialized turns with problem statement, turn count: {len(data_point['turns'])}")
+
+        except Exception as e:
+            LOG.error(f"Error loading repository for instance {data_point.get('instance_id', 'unknown')}: {e}")
+            # Return early with error status
+            return {
+                'generation': [],
+                'total_generated_tokens': 0,
+                'num_turns': 0,
+                'status': 'failed',
+                'reason': f'repository_loading_error: {str(e)}',
+                'turns': data_point['turns'],  # Will have the empty structure
+            }
 
         reason = None
         status = None
         try:
             for cur_step in range(total_steps):
+                # Validate turns structure at the beginning of each iteration
+                if (
+                    'turns' not in data_point
+                    or not isinstance(data_point['turns'], list)
+                    or len(data_point['turns']) == 0
+                ):
+                    LOG.error(f"Invalid turns structure at step {cur_step}: {data_point.get('turns', 'missing')}")
+                    status = "failed"
+                    reason = "invalid_turns_structure"
+                    break
+
+                # Check and truncate dialogue history if needed before making the LLM call
+                if hasattr(self.cfg, 'max_seq_length') and self.cfg.max_seq_length > 0:
+                    original_turns_count = len(data_point['turns'])
+                    data_point['turns'] = truncate_dialogue_history(
+                        data_point['turns'], self.cfg.max_seq_length, self.cfg.tokens_to_generate
+                    )
+                    if len(data_point['turns']) < original_turns_count:
+                        LOG.info(f"Truncated dialogue from {original_turns_count} to {len(data_point['turns'])} turns")
+
+                # Use original data_point for LLM call
+                prepared_data_point = copy.deepcopy(data_point)
+
+
                 try:
-                    llm_output = await super().process_single_datapoint(data_point, all_data)
+                    LOG.info(f"Sending {len(prepared_data_point['turns'])} turns to LLM")
+                    llm_output = await super().process_single_datapoint(prepared_data_point, all_data)
                 # TODO: this is a hack (as not all servers return that),
                 # but eventually we should support handling errors like this globally for all generations
                 except openai.BadRequestError as e:
                     if 'Please reduce the length of the messages or completion' in str(e):
                         LOG.warning(
-                            "LocAgent generation failed due to running out of context. " "Failing for subsequent subtasks automatically.",
+                            "LocAgent generation failed due to running out of context. "
+                            "Failing for subsequent subtasks automatically.",
                         )
                         status = "failed"
                         reason = "context_length_exceeded"
@@ -223,7 +376,18 @@ class LocAgentGenerationTask(GenerationTask):
 
                 if self.cfg.remove_thinking:
                     remove_thinking(llm_output, 'generation', self.cfg.thinking_begin, self.cfg.thinking_end)
-                extracted_block = DialogProcessor.extract_response(llm_output['generation'], self.cfg)
+
+                # Try to extract response with error handling
+                try:
+                    extracted_block = DialogProcessor.extract_response(llm_output['generation'], self.cfg)
+                except Exception as e:
+                    LOG.error(f"Error extracting response from LLM output: {e}")
+                    LOG.debug(
+                        f"LLM output was: {llm_output.get('generation', 'None')[:500]}..."
+                    )  # Log first 500 chars
+                    status = "failed"
+                    reason = f"response_extraction_error: {str(e)}"
+                    break
 
                 if not extracted_block:
                     LOG.warning("Model failed to generate a tool use or location. Ending generation.")
@@ -232,20 +396,97 @@ class LocAgentGenerationTask(GenerationTask):
                     reason = "no_tool_or_location_generated"
                     break
 
-                data_point['turns'][-1]['assistant'] = extracted_block
-                data_point['turns'][-1]['assistant_raw'] = llm_output['generation']
-                data_point['turns'][-1]['assistant_raw_w_think'] = llm_output.get('_full_generation', llm_output['generation'])
-                if extracted_block["type"] == "tool_calls":
+                # Safely add assistant response to the current turn
+                try:
+                    if data_point['turns'] and len(data_point['turns']) > 0:
+                        current_turn = data_point['turns'][-1]
+                        if isinstance(current_turn, dict):
+                            # Store raw LLM generation
+                            current_turn['assistant'] = llm_output['generation']
+                            current_turn['assistant_raw'] = llm_output.get('raw_generation', llm_output['generation'])
+                            current_turn['assistant_raw_w_think'] = llm_output.get(
+                                '_full_generation', llm_output['generation']
+                            )
+
+                            # Store extracted structured data
+                            if extracted_block:
+                                if extracted_block.get("type") == "tool_calls":
+                                    current_turn['tool_call'] = extracted_block.get("tool_call", None)
+                                elif extracted_block.get("type") == "locations":
+                                    current_turn['locations'] = extracted_block.get("locations", [])
+                        else:
+                            LOG.error(f"Current turn is not a dict: {type(current_turn)}")
+                            status = "failed"
+                            reason = "invalid_turn_structure"
+                            break
+                    else:
+                        LOG.error("No turns available to add assistant response")
+                        status = "failed"
+                        reason = "no_turns_available"
+                        break
+                except Exception as e:
+                    LOG.error(f"Error adding assistant response to turn: {e}")
+                    status = "failed"
+                    reason = f"turn_update_error: {str(e)}"
+                    break
+                if extracted_block.get("type") == "tool_calls":
+                    if "tool_call" not in extracted_block:
+                        LOG.error(f"Missing 'tool_call' in extracted block: {extracted_block}")
+                        status = "failed"
+                        reason = "missing_tool_call_in_extracted_block"
+                        break
                     tool_call_result = self.tool_executor.execute_tool(extracted_block["tool_call"], repo_dict)
-                    data_point['turns'].append({"inputs": tool_call_result})
-                elif extracted_block["type"] == "locations":
+
+                    tool_output_to_store = tool_call_result
+
+                    # CRITICAL FIX: Add tool output to the CURRENT turn, not a new one
+                    # This maintains the association between tool_call and tool_output
+                    if data_point['turns'] and len(data_point['turns']) > 0:
+                        current_turn = data_point['turns'][-1]
+                        if isinstance(current_turn, dict):
+                            current_turn['tool_output'] = tool_output_to_store
+                            LOG.debug(f"Added tool output to current turn {len(data_point['turns'])-1}")
+                            
+                            # Now create a new turn for the next iteration
+                            # The new turn has the tool output as input for the assistant to analyze
+                            new_turn = {
+                                "inputs": tool_output_to_store,
+                                "assistant": "",
+                                "tool_call": None,
+                                "tool_output": "",
+                            }
+                            data_point['turns'].append(new_turn)
+                            LOG.debug(f"Added new turn for next iteration, total turns: {len(data_point['turns'])}")
+                        else:
+                            LOG.error(f"Current turn is not a dict: {type(current_turn)}")
+                            status = "failed"
+                            reason = "invalid_turn_structure_for_tool_output"
+                            break
+                    else:
+                        LOG.error("No turns available to add tool output")
+                        status = "failed"
+                        reason = "no_turns_for_tool_output"
+                        break
+                elif extracted_block.get("type") == "locations":
+                    if "locations" not in extracted_block:
+                        LOG.error(f"Missing 'locations' in extracted block: {extracted_block}")
+                        status = "failed"
+                        reason = "missing_locations_in_extracted_block"
+                        break
                     data_point["locations"] = extracted_block["locations"]
                     status = "success"
                     reason = None
                     break
 
-                print("Current messages", data_point['turns'])
-                
+                if data_point.get('turns') and len(data_point['turns']) > 0:
+                    last_turn = data_point['turns'][-1]
+                    has_assistant = isinstance(last_turn, dict) and 'assistant' in last_turn
+                    LOG.debug(
+                        f"Current turn count: {len(data_point['turns'])}, last turn has assistant: {has_assistant}"
+                    )
+                else:
+                    LOG.debug("No turns available to check for assistant field")
+
                 # Check if we've reached the maximum steps without success
                 if cur_step == total_steps - 1 and status is None:
                     status = "failed"
@@ -259,24 +500,118 @@ class LocAgentGenerationTask(GenerationTask):
                     reason = "unknown_failure"
         except Exception as e:
             LOG.error(f"Unexpected error in process_single_datapoint: {e}")
+            import traceback
+
+            full_traceback = traceback.format_exc()
+            LOG.error(f"Full traceback:\n{full_traceback}")
+
+            # Debug the state when error occurs
+            LOG.error("=== DEBUG STATE AT ERROR ===")
+            LOG.error(f"Error type: {type(e).__name__}")
+            LOG.error(f"Error message: {str(e)}")
+
+            # Also print for immediate visibility
+            print(f"\n{'='*60}")
+            print(f"ERROR in process_single_datapoint: {e}")
+            print(f"Error type: {type(e).__name__}")
+            print(f"Full traceback:\n{full_traceback}")
+
+            # Check data_point structure
+            if isinstance(data_point, dict):
+                LOG.error(f"data_point keys: {list(data_point.keys())}")
+                print(f"data_point keys: {list(data_point.keys())}")
+
+                if 'turns' in data_point:
+                    LOG.error(f"Number of turns: {len(data_point['turns'])}")
+                    print(f"Number of turns: {len(data_point['turns'])}")
+
+                    for i, turn in enumerate(data_point['turns'][:5]):  # Show first 5 turns
+                        if isinstance(turn, dict):
+                            LOG.error(f"Turn {i} keys: {list(turn.keys())}")
+                            LOG.error(f"Turn {i} has 'assistant': {'assistant' in turn}")
+                            print(f"Turn {i} keys: {list(turn.keys())}")
+                            print(f"  - has 'assistant': {'assistant' in turn}")
+                            print(f"  - has 'inputs': {'inputs' in turn}")
+                            print(f"  - has 'tool_call': {'tool_call' in turn}")
+                            print(f"  - has 'tool_output': {'tool_output' in turn}")
+                        else:
+                            LOG.error(f"Turn {i} is not a dict: {type(turn)}")
+                            print(f"Turn {i} is not a dict: {type(turn)}, value: {turn}")
+                else:
+                    LOG.error("No 'turns' key in data_point")
+                    print("No 'turns' key in data_point")
+            else:
+                LOG.error(f"data_point is not a dict: {type(data_point)}")
+                print(f"data_point is not a dict: {type(data_point)}")
+
+            print(f"{'='*60}\n")
+            LOG.error("=== END DEBUG STATE ===")
+
             status = "failed"
             reason = f"exception: {str(e)}"
+
+        # Ensure turns is always properly structured even in error cases
+        if 'turns' not in data_point:
+            LOG.warning("Missing 'turns' in data_point at return time, initializing empty structure")
+            data_point['turns'] = []
+
+        # Final validation and repair of turn structure
+        for i, turn in enumerate(data_point.get('turns', [])):
+            if not isinstance(turn, dict):
+                LOG.error(f"Turn {i} is not a dictionary: {type(turn)}")
+                # Convert to proper structure
+                data_point['turns'][i] = {
+                    "inputs": str(turn) if turn else "",
+                    "assistant": "",
+                    "tool_call": None,
+                    "tool_output": "",
+                }
+            else:
+                # Ensure all required fields exist with proper defaults
+                if 'inputs' not in turn:
+                    turn['inputs'] = ''
+                if 'assistant' not in turn:
+                    turn['assistant'] = ''
+                if 'tool_call' not in turn:
+                    turn['tool_call'] = None
+                if 'tool_output' not in turn:
+                    turn['tool_output'] = ''
+
+                LOG.debug(
+                    f"Final turn {i} validation - has assistant: {'assistant' in turn}, keys: {list(turn.keys())}"
+                )
 
         # generation is a dict["problem_id.subtask_step": full_solution] here
         # """
         # [
         #     User: Problem statement,
-        #     Assistant: {“generation”: generation with reasoning trace, “tool_call”: … },
-        #     User: {“tool_output”: “”},
-        #     Assistant: {“generation”: … “location”: …}
+        #     Assistant: {"generation": generation with reasoning trace, "tool_call": … },
+        #     User: {"tool_output": ""},
+        #     Assistant: {"generation": … "location": …}
         # ]
         # """
+
+        # Debug log the turns structure before returning
+        if 'turns' in data_point:
+            LOG.debug(f"Returning {len(data_point['turns'])} turns")
+
+        # Get the pre-calculated ground truth percentage and missing files
+        ground_truth_in_repo_percentage = data_point.get('_ground_truth_in_repo_percentage', 0.0)
+        missing_ground_truth_files = data_point.get('_missing_ground_truth_files', [])
+
+        # Clean up temporary variables from data_point
+        data_point.pop('_ground_truth_in_repo_percentage', None)
+        data_point.pop('_missing_ground_truth_files', None)
+
         return {
             'generation': chat_history,
             'total_generated_tokens': total_generated_tokens,
             'num_turns': len(chat_history),
             'status': status,
             'reason': reason,
+            'turns': data_point.get('turns', []),  # Include the turns
+            'ground_truth_in_repo_percentage': ground_truth_in_repo_percentage,  # Percentage of ground truth files that exist in repo
+            'missing_ground_truth_files': missing_ground_truth_files,  # Details about which GT files are missing and why
         }
 
 

@@ -105,6 +105,249 @@ def main(cfg) -> None:
 
     init_peft(ptl_model, cfg.model)
 
+    # # ============================================================================
+    # # CUSTOM TOKENS HANDLING
+    # # ============================================================================
+    # logging.info("=" * 80)
+    # logging.info("🔧 CHECKING AND ADDING CUSTOM TOKENS")
+    # logging.info("=" * 80)
+    
+    # custom_tokens = ["<tool_call>", "</tool_call>", "<locations>", "</locations>"]
+    # tokenizer = ptl_model.tokenizer
+    # original_vocab_size = len(tokenizer) if hasattr(tokenizer, '__len__') else getattr(tokenizer, 'vocab_size', 'unknown')
+    
+    # logging.info(f"📝 Original tokenizer vocab size: {original_vocab_size}")
+    # logging.info(f"🔍 Checking for custom tokens: {custom_tokens}")
+    # logging.info("-" * 60)
+    
+    # # Check which tokens exist and which need to be added
+    # existing_tokens = []
+    # tokens_to_add = []
+    
+    # for token in custom_tokens:
+    #     try:
+    #         token_exists = False
+    #         token_id = None
+            
+    #         # Try different methods to check token existence
+    #         if hasattr(tokenizer, 'token_to_id'):
+    #             token_id = tokenizer.token_to_id(token)
+    #             token_exists = token_id is not None
+    #         elif hasattr(tokenizer, 'text_to_ids'):
+    #             # For NeMo tokenizers, check if token is split
+    #             ids = tokenizer.text_to_ids(token)
+    #             token_exists = len(ids) == 1
+    #             if token_exists:
+    #                 token_id = ids[0]
+            
+    #         if token_exists:
+    #             existing_tokens.append((token, token_id))
+    #             logging.info(f"  ✅ Found: '{token}' (ID: {token_id})")
+    #         else:
+    #             tokens_to_add.append(token)
+    #             logging.info(f"  ❌ Missing: '{token}' - will be added")
+                
+    #     except Exception as e:
+    #         tokens_to_add.append(token)
+    #         logging.info(f"  ❌ Missing: '{token}' - will be added (error checking: {e})")
+    
+    # logging.info("-" * 60)
+    # logging.info(f"📊 Summary: {len(existing_tokens)} existing, {len(tokens_to_add)} to add")
+    
+    # if tokens_to_add:
+    #     logging.info("=" * 40)
+    #     logging.info("🔨 ADDING MISSING TOKENS")
+    #     logging.info("=" * 40)
+    #     logging.info(f"➕ Adding {len(tokens_to_add)} custom tokens: {tokens_to_add}")
+        
+    #     # Add tokens to tokenizer
+    #     add_success = False
+    #     if hasattr(tokenizer, 'add_special_tokens'):
+    #         # For HF-style tokenizers
+    #         num_added = tokenizer.add_special_tokens({"additional_special_tokens": tokens_to_add})
+    #         add_success = True
+    #         logging.info(f"  ✅ Added {num_added} tokens using add_special_tokens()")
+    #     elif hasattr(tokenizer, 'add_tokens'):
+    #         # For some tokenizer types
+    #         num_added = tokenizer.add_tokens(tokens_to_add)
+    #         add_success = True
+    #         logging.info(f"  ✅ Added {num_added} tokens using add_tokens()")
+    #     else:
+    #         logging.error("  ❌ Could not add custom tokens - tokenizer type not supported")
+    #         logging.error(f"  📝 Tokenizer type: {type(tokenizer)}")
+        
+    #     if add_success:
+    #         new_vocab_size = len(tokenizer) if hasattr(tokenizer, '__len__') else getattr(tokenizer, 'vocab_size', 'unknown')
+    #         logging.info(f"  📝 New tokenizer vocab size: {new_vocab_size}")
+            
+    #         # Resize model embeddings to match new vocab size
+    #         logging.info("🔧 Resizing model embeddings...")
+    #         resize_success = False
+            
+    #         # Try standard HuggingFace-style methods first
+    #         if hasattr(ptl_model, 'resize_token_embeddings'):
+    #             ptl_model.resize_token_embeddings(new_vocab_size)
+    #             resize_success = True
+    #             logging.info(f"  ✅ Resized model embeddings to {new_vocab_size} using ptl_model.resize_token_embeddings()")
+    #         elif hasattr(ptl_model.model, 'resize_token_embeddings'):
+    #             ptl_model.model.resize_token_embeddings(new_vocab_size)
+    #             resize_success = True
+    #             logging.info(f"  ✅ Resized model embeddings to {new_vocab_size} using ptl_model.model.resize_token_embeddings()")
+    #         else:
+    #             # Manual embedding resize for NeMo models
+    #             logging.info("  🔧 Attempting manual embedding resize for NeMo model...")
+    #             try:
+    #                 import torch
+    #                 import torch.nn as nn
+                    
+    #                 # Find the embedding layer in the model
+    #                 embedding_layer = None
+    #                 embedding_path = None
+                    
+    #                 # Common paths for NeMo model embeddings
+    #                 possible_paths = [
+    #                     'model.embedding.word_embeddings',
+    #                     'model.language_model.embedding.word_embeddings', 
+    #                     'model.module.embedding.word_embeddings',
+    #                     'model.module.language_model.embedding.word_embeddings',
+    #                     'model.model.embedding.word_embeddings',
+    #                     'model.model.language_model.embedding.word_embeddings',
+    #                     'model.decoder.embeddings.word_embeddings',
+    #                     'model.decoder.embed_tokens',
+    #                     'model.embed_tokens',
+    #                     'embedding.word_embeddings',
+    #                     'language_model.embedding.word_embeddings'
+    #                 ]
+                    
+    #                 # Also try to inspect the model structure dynamically
+    #                 logging.info(f"  🔍 Inspecting model structure...")
+    #                 try:
+    #                     # First, let's examine the top-level model structure
+    #                     logging.info(f"  📝 Model type: {type(ptl_model)}")
+    #                     top_level_attrs = [attr for attr in dir(ptl_model) if not attr.startswith('_') and not callable(getattr(ptl_model, attr, None))]
+    #                     logging.info(f"  📝 Top-level attributes: {top_level_attrs[:10]}...")  # Show first 10
+                        
+    #                     def find_embedding_layers(obj, path="", max_depth=4):
+    #                         """Recursively find embedding layers in the model."""
+    #                         if max_depth <= 0:
+    #                             return []
+                            
+    #                         # Skip problematic attributes that cause warnings
+    #                         skip_attrs = {
+    #                             'H', 'T', 'mH', 'mT', 'real', 'imag', 'shape', 'data', 'grad', 'device', 'dtype',
+    #                             'requires_grad', 'is_leaf', 'grad_fn', 'names', 'ndim', 'size', 'stride'
+    #                         }
+                            
+    #                         found_embeddings = []
+    #                         if hasattr(obj, '__dict__') or hasattr(obj, '__class__'):
+    #                             for attr_name in dir(obj):
+    #                                 if (attr_name.startswith('_') or 
+    #                                     attr_name in skip_attrs or
+    #                                     attr_name.startswith('is_') or
+    #                                     attr_name.endswith('_')):
+    #                                     continue
+                                    
+    #                                 try:
+    #                                     attr_value = getattr(obj, attr_name)
+    #                                     current_path = f"{path}.{attr_name}" if path else attr_name
+                                        
+    #                                     # Check if this is an embedding layer
+    #                                     if isinstance(attr_value, nn.Embedding):
+    #                                         found_embeddings.append((current_path, attr_value))
+    #                                         logging.info(f"    🎯 Found embedding: {current_path} ({attr_value.num_embeddings} x {attr_value.embedding_dim})")
+    #                                     # Continue searching in modules and non-callable attributes
+    #                                     elif (hasattr(attr_value, '__dict__') and 
+    #                                           not callable(attr_value) and 
+    #                                           not isinstance(attr_value, (torch.Tensor, str, int, float, bool, list, dict, tuple))):
+    #                                         found_embeddings.extend(find_embedding_layers(attr_value, current_path, max_depth-1))
+    #                                 except Exception as e:
+    #                                     # Skip attributes that cause issues
+    #                                     continue
+                                        
+    #                         return found_embeddings
+                        
+    #                     found_embeddings = find_embedding_layers(ptl_model)
+    #                     if found_embeddings:
+    #                         logging.info(f"  📋 Found {len(found_embeddings)} embedding layers:")
+    #                         for path, emb in found_embeddings:
+    #                             logging.info(f"    - {path}: {emb.num_embeddings} x {emb.embedding_dim}")
+    #                         # Add the found paths to our search list
+    #                         for path, emb in found_embeddings:
+    #                             if path not in possible_paths:
+    #                                 possible_paths.append(path)
+    #                     else:
+    #                         logging.info(f"  ❌ No embedding layers found in dynamic search")
+    #                         # Try to show model structure for debugging
+    #                         if hasattr(ptl_model, 'model'):
+    #                             logging.info(f"  📝 ptl_model.model type: {type(ptl_model.model)}")
+    #                             if hasattr(ptl_model.model, '__dict__'):
+    #                                 model_attrs = [attr for attr in dir(ptl_model.model) if not attr.startswith('_')][:10]
+    #                                 logging.info(f"  📝 ptl_model.model attributes: {model_attrs}")
+    #                 except Exception as e:
+    #                     logging.info(f"  ⚠️  Dynamic search failed: {e}")
+                    
+    #                 for path in possible_paths:
+    #                     try:
+    #                         embedding_layer = ptl_model
+    #                         for attr in path.split('.'):
+    #                             embedding_layer = getattr(embedding_layer, attr)
+    #                         if isinstance(embedding_layer, nn.Embedding):
+    #                             embedding_path = path
+    #                             break
+    #                     except AttributeError:
+    #                         continue
+                    
+    #                 if embedding_layer is not None and isinstance(embedding_layer, nn.Embedding):
+    #                     old_vocab_size = embedding_layer.num_embeddings
+    #                     embedding_dim = embedding_layer.embedding_dim
+                        
+    #                     logging.info(f"  📝 Found embedding layer at: {embedding_path}")
+    #                     logging.info(f"  📝 Current size: {old_vocab_size} → Target size: {new_vocab_size}")
+    #                     logging.info(f"  📝 Embedding dimension: {embedding_dim}")
+                        
+    #                     if new_vocab_size > old_vocab_size:
+    #                         # Create new embedding layer with expanded size
+    #                         new_embedding = nn.Embedding(new_vocab_size, embedding_dim)
+                            
+    #                         # Copy existing weights
+    #                         with torch.no_grad():
+    #                             new_embedding.weight[:old_vocab_size] = embedding_layer.weight.data
+    #                             # Initialize new token embeddings with small random values
+    #                             nn.init.normal_(new_embedding.weight[old_vocab_size:], mean=0.0, std=0.02)
+                            
+    #                         # Replace the embedding layer
+    #                         parent_obj = ptl_model
+    #                         path_parts = embedding_path.split('.')
+    #                         for attr in path_parts[:-1]:
+    #                             parent_obj = getattr(parent_obj, attr)
+    #                         setattr(parent_obj, path_parts[-1], new_embedding)
+                            
+    #                         logging.info(f"  ✅ Successfully resized embeddings from {old_vocab_size} to {new_vocab_size}")
+    #                         logging.info(f"  📝 New tokens initialized with random values (std=0.02)")
+    #                         resize_success = True
+    #                     else:
+    #                         logging.info(f"  ℹ️  No resize needed (current: {old_vocab_size}, target: {new_vocab_size})")
+    #                         resize_success = True
+    #                 else:
+    #                     logging.error("  ❌ Could not find embedding layer in model")
+    #                     logging.error(f"  📝 Searched paths: {possible_paths}")
+                        
+    #             except Exception as e:
+    #                 logging.error(f"  ❌ Manual embedding resize failed: {e}")
+    #                 logging.error(f"  📝 Exception type: {type(e).__name__}")
+            
+    #         if resize_success:
+    #             logging.info("  🎉 Custom tokens successfully added and embeddings resized!")
+    #         else:
+    #             logging.warning("  ⚠️  Custom tokens added but embedding resize failed - this may cause issues")
+    #             logging.warning("  💡 Training may still work but new tokens will have undefined behavior")
+    # else:
+    #     logging.info("✅ All custom tokens already present in tokenizer - no action needed")
+    
+    # logging.info("=" * 80)
+    # logging.info("🏁 CUSTOM TOKENS HANDLING COMPLETE")
+    # logging.info("=" * 80)
+
     with open_dict(cfg):
         # overwrite the model config with the config from the checkpoint
         cfg.model.encoder_seq_length = ptl_model.cfg.encoder_seq_length

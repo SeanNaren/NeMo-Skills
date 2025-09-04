@@ -342,12 +342,25 @@ def convert(
             trt_reuse_tmp_engine=trt_reuse_tmp_engine,
         ),
     }
-    container_map = {
-        ("nemo", "hf"): cluster_config["containers"]["nemo"],
-        ("hf", "megatron"): cluster_config["containers"]["megatron"],
-        ("hf", "nemo"): cluster_config["containers"]["nemo"],
-        ("hf", "trtllm"): cluster_config["containers"]["trtllm"],
+    # Select container lazily to avoid accessing optional entries (e.g., 'megatron') unnecessarily
+    container_key_map = {
+        ("nemo", "hf"): "nemo",
+        ("hf", "megatron"): "megatron",
+        ("hf", "nemo"): "nemo",
+        ("hf", "trtllm"): "trtllm",
     }
+    try:
+        selected_container_key = container_key_map[(convert_from, convert_to)]
+    except KeyError:
+        raise ValueError(
+            f"Unsupported conversion combination: from '{convert_from}' to '{convert_to}'"
+        )
+    container_value = cluster_config["containers"].get(selected_container_key)
+    if container_value is None:
+        raise ValueError(
+            f"Container '{selected_container_key}' is not defined in cluster config under 'containers'. "
+            f"Add it to your cluster config or choose a supported conversion."
+        )
     conversion_cmd = conversion_cmd_map[(convert_from, convert_to)](
         input_model=input_model,
         output_model=output_model,
@@ -365,7 +378,7 @@ def convert(
             cmd=conversion_cmd,
             task_name=expname,
             log_dir=log_dir,
-            container=container_map[(convert_from, convert_to)],
+            container=container_value,
             num_gpus=num_gpus,
             num_nodes=1,  # always running on a single node, might need to change that in the future
             num_tasks=1,
