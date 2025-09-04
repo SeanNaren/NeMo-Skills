@@ -52,6 +52,27 @@ try:
 except ImportError:
     LOOP_DETECTION_AVAILABLE = False
 
+# Import enhanced context management (optional, backwards compatible)
+try:
+    from nemo_skills.inference.eval.locagent_utils.enhanced_context_management import (
+        TokenCounter,
+        enhanced_truncate_dialogue,
+        check_context_before_generation
+    )
+    ENHANCED_CONTEXT_AVAILABLE = True
+except ImportError:
+    ENHANCED_CONTEXT_AVAILABLE = False
+
+# Import final turn prompt injection (optional, backwards compatible)
+try:
+    from nemo_skills.inference.eval.locagent_utils.final_turn_prompt import (
+        inject_final_turn_instruction,
+        should_inject_final_turn
+    )
+    FINAL_TURN_PROMPT_AVAILABLE = True
+except ImportError:
+    FINAL_TURN_PROMPT_AVAILABLE = False
+
 PROMPT_TEMPLATE_VERSION: str = "v4"
 
 
@@ -226,11 +247,21 @@ class LocalAgentGenerationConfig(GenerateSolutionsConfig):
     tokens_to_generate: int = 8192  # Tokens to reserve for model response
     
     # Truncation strategy settings
-    truncation_strategy: str = "bookend"  # Options: "sequential" (default), "bookend", "smart_bookend"
+    truncation_strategy: str = "bookend"  # Options: "sequential" (default), "bookend", "smart_bookend", "enhanced"
     
     # Loop detection settings
     enable_loop_detection: bool = True  # Enable detection and prevention of repetitive tool calls
     loop_detection_threshold: int = 3  # Number of identical calls to trigger loop detection
+    
+    # Enhanced context management settings
+    enable_enhanced_context: bool = True  # Use enhanced context management with better token counting
+    context_safety_margin: float = 0.9  # Use only this fraction of max context (0.9 = 90%)
+    use_tiktoken: bool = True  # Use tiktoken for accurate token counting if available
+    
+    # Final turn prompt settings
+    enable_final_turn_prompt: bool = True  # Inject instruction on final turn to force location prediction
+    final_turn_instruction_type: str = "aligned"  # Type of instruction: aligned, standard, urgent, gentle, detailed
+    final_turn_threshold: float = 1.0  # When to trigger (1.0 = only last turn, 0.8 = last 20% of turns)
     
     # Summarization settings (currently disabled, preserved for future use)
     enable_turn_summarization: bool = False  # Enable context summarization to reduce token usage
@@ -385,7 +416,27 @@ class LocAgentGenerationTask(GenerationTask):
                     # Apply selected truncation strategy
                     truncation_strategy = getattr(self.cfg, 'truncation_strategy', 'sequential')
                     
-                    if truncation_strategy == 'bookend' and BOOKEND_TRUNCATION_AVAILABLE:
+                    # Use enhanced context management if available and enabled
+                    if (ENHANCED_CONTEXT_AVAILABLE and 
+                        getattr(self.cfg, 'enable_enhanced_context', True) and
+                        (truncation_strategy == 'enhanced' or 
+                         getattr(self.cfg, 'use_tiktoken', True))):
+                        LOG.debug(f"Using enhanced context management")
+                        # Initialize token counter if not already done
+                        if not hasattr(self, '_token_counter'):
+                            self._token_counter = TokenCounter(getattr(self.cfg, 'model', 'gpt-4'))
+                        
+                        # Use enhanced truncation
+                        data_point['turns'], truncation_stats = enhanced_truncate_dialogue(
+                            data_point['turns'], 
+                            self.cfg.max_seq_length, 
+                            self.cfg.tokens_to_generate,
+                            safety_margin=getattr(self.cfg, 'context_safety_margin', 0.9),
+                            token_counter=self._token_counter
+                        )
+                        LOG.info(f"Enhanced truncation stats: {truncation_stats}")
+                        
+                    elif truncation_strategy == 'bookend' and BOOKEND_TRUNCATION_AVAILABLE:
                         LOG.debug(f"Using bookend truncation strategy")
                         data_point['turns'] = bookend_truncate_dialogue_history(
                             data_point['turns'], self.cfg.max_seq_length, self.cfg.tokens_to_generate
@@ -419,6 +470,35 @@ class LocAgentGenerationTask(GenerationTask):
                         LOG.warning(f"Potential loop detected before generation! Previous {loop_info['total_repetitions']} calls were identical")
                         # Inject intervention message to prevent loop continuation
                         prepared_data_point['turns'] = inject_loop_intervention(prepared_data_point['turns'], loop_info)
+                
+                # Proactive context length check before making LLM call
+                if ENHANCED_CONTEXT_AVAILABLE and getattr(self.cfg, 'enable_enhanced_context', True):
+                    will_fit, error_msg, context_stats = check_context_before_generation(
+                        prepared_data_point, 
+                        self.cfg,
+                        getattr(self, '_token_counter', None)
+                    )
+                    if not will_fit:
+                        LOG.error(f"Context length check failed: {error_msg}")
+                        LOG.error(f"Context stats: {context_stats}")
+                        status = "failed"
+                        reason = "context_length_exceeded_proactive"
+                        break
+                
+                # Check if we should inject final turn instruction
+                if FINAL_TURN_PROMPT_AVAILABLE and should_inject_final_turn(
+                    cur_step, 
+                    total_steps, 
+                    status,
+                    enable_final_turn_prompt=getattr(self.cfg, 'enable_final_turn_prompt', True),
+                    final_turn_threshold=getattr(self.cfg, 'final_turn_threshold', 1.0)
+                ):
+                    LOG.info(f"Injecting final turn instruction at step {cur_step + 1}/{total_steps}")
+                    prepared_data_point['turns'] = inject_final_turn_instruction(
+                        prepared_data_point['turns'],
+                        is_final_turn=True,
+                        instruction_type=getattr(self.cfg, 'final_turn_instruction_type', 'standard')
+                    )
 
 
                 try:

@@ -8,6 +8,9 @@ This directory contains all utility modules and documentation for the LocAgent c
 - `utils.py` - General utility functions (repo filtering, tree generation, patch parsing)
 - `bookend_truncation.py` - Alternative truncation strategies for dialogue history
 - `locagent_summarization.py` - Summarization code (currently disabled, preserved for future use)
+- `loop_detection.py` - Detection and prevention of repetitive agent behavior
+- `enhanced_context_management.py` - Advanced context length management with accurate token counting
+- `final_turn_prompt.py` - Final turn prompt injection to ensure location predictions
 
 ### Version-Specific Modules
 - `v4/` - Current production version
@@ -15,13 +18,15 @@ This directory contains all utility modules and documentation for the LocAgent c
   - `tool_executor.py` - Executes tool calls (view_file, codebase_search, etc.)
 
 ### Documentation
-- `TESTING_GUIDE_BACKWARDS_COMPATIBLE.md` - How to test different truncation strategies
-- `BOOKEND_TRUNCATION_TESTING.md` - Specific guide for bookend truncation testing
-- `FAILED_SUMMARIZATION_ANALYSIS.md` - Analysis of why failed summarization led to better scores
-- `SUMMARIZATION_ISSUE_ANALYSIS.md` - Detailed analysis of summarization problems
-- `SUMMARIZATION_TODO.md` - TODO list for fixing summarization
-- `DEV_NULL_BUG_FIX.md` - Documentation of the /dev/null bug fix
-- `QUICK_TEST_BOOKEND.md` - Quick test instructions for bookend truncation
+All functionality-related documentation has been organized in the `docs/` subdirectory:
+- `docs/README.md` - Overview of all documentation files
+- `docs/SUMMARIZATION_*.md` - Summarization-related documentation
+- `docs/BOOKEND_*.md` - Bookend truncation documentation
+- `docs/LOOP_DETECTION_*.md` - Loop detection system documentation
+- `docs/ENHANCED_CONTEXT_*.md` - Context management documentation
+- `docs/FINAL_TURN_PROMPT_*.md` - Final turn prompt feature documentation
+- `docs/DEV_NULL_BUG_FIX.md` - Bug fix documentation
+- `docs/TESTING_GUIDE_BACKWARDS_COMPATIBLE.md` - Testing guide
 
 ## Import Paths
 
@@ -29,6 +34,9 @@ All modules should be imported with the full path:
 ```python
 from nemo_skills.inference.eval.locagent_utils.utils import filter_repo_dict, tree_repo_dict
 from nemo_skills.inference.eval.locagent_utils.bookend_truncation import bookend_truncate_dialogue_history
+from nemo_skills.inference.eval.locagent_utils.loop_detection import detect_repetitive_tool_calls
+from nemo_skills.inference.eval.locagent_utils.enhanced_context_management import TokenCounter
+from nemo_skills.inference.eval.locagent_utils.final_turn_prompt import inject_final_turn_instruction
 from nemo_skills.inference.eval.locagent_utils.v4.dialog_processor import DialogProcessor
 from nemo_skills.inference.eval.locagent_utils.v4.tool_executor import ToolExecutor
 ```
