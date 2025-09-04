@@ -245,6 +245,10 @@ class LocalAgentGenerationConfig(GenerateSolutionsConfig):
     # Context management settings
     max_seq_length: int = 32768  # Maximum context length in tokens (adjust based on your model)
     tokens_to_generate: int = 8192  # Tokens to reserve for model response
+    # max_seq_length: int = 42768  # Maximum context length in tokens (adjust based on your model)
+    # tokens_to_generate: int = 8192  # Tokens to reserve for model response
+    # max_seq_length: int = 262144  # Maximum context length in tokens (adjust based on your model)
+    # tokens_to_generate: int = 81920  # Tokens to reserve for model response
     
     # Truncation strategy settings
     truncation_strategy: str = "bookend"  # Options: "sequential" (default), "bookend", "smart_bookend", "enhanced"

@@ -2,6 +2,10 @@
 
 This directory contains all functionality-related documentation for the LocAgent utilities.
 
+## 📖 Start Here
+- **LOCAGENT_ACCURATE_GUIDE.md** - Accurate technical guide based on actual code implementation
+- **QUICK_REFERENCE_ACCURATE.md** - Quick reference with real configuration values and limits
+
 ## Core Functionality Documents
 
 ### Summarization
@@ -39,9 +43,16 @@ This directory contains all functionality-related documentation for the LocAgent
 
 | Feature | Status | Implementation File | Documentation |
 |---------|--------|-------------------|---------------|
-| Summarization | Disabled (Placeholder) | `locagent_summarization.py` | SUMMARIZATION_*.md |
-| Bookend Truncation | Active | `bookend_truncation.py` | BOOKEND_*.md |
+| Summarization | DISABLED | `locagent_summarization.py` | SUMMARIZATION_*.md |
+| Bookend Truncation | Active (DEFAULT) | `bookend_truncation.py` | BOOKEND_*.md |
 | Loop Detection | Active | `loop_detection.py` | LOOP_DETECTION_*.md |
 | Enhanced Context Management | Active | `enhanced_context_management.py` | ENHANCED_CONTEXT_*.md |
 | Final Turn Prompt | Active | `final_turn_prompt.py` | FINAL_TURN_PROMPT_*.md |
 | Utility Functions | Active | `utils.py` | DEV_NULL_BUG_FIX.md |
+
+## ⚠️ Critical Information
+
+- **File Extensions**: ONLY `.py` and `.cfg` files are included in the repository view!
+- **Context Limits**: 262,144 total tokens, ~162k usable with safety margin
+- **Default Truncation**: `bookend` strategy (keeps first + last turns only)
+- **Summarization**: Currently DISABLED (`enable_turn_summarization = False`)
