@@ -141,7 +141,7 @@ class LocalAgentGenerationConfig(GenerateSolutionsConfig):
             "logs",
             "tmp",
             "temp",
-            "cache",
+            # "cache", - Removed - django/core/cache/backends/filebased.py from swe-bench lite
             "vendor",
             # "lib",  # Removed - matplotlib's main source directory!
             "libs",
@@ -238,18 +238,12 @@ class LocalAgentGenerationConfig(GenerateSolutionsConfig):
         ]
     )
 
+    max_seq_length: int | None = None  # Maximum context length in tokens (set via CLI)
+
     # Display settings
     show_line_counts: bool = False  # Show file line counts in repository tree output
     max_view_lines: int = 1000  # Maximum lines to show in view tool (0 = no limit) - reduced from 1000 to 300
 
-    # Context management settings
-    max_seq_length: int = 32768  # Maximum context length in tokens (adjust based on your model)
-    tokens_to_generate: int = 8192  # Tokens to reserve for model response
-    # max_seq_length: int = 42768  # Maximum context length in tokens (adjust based on your model)
-    # tokens_to_generate: int = 8192  # Tokens to reserve for model response
-    # max_seq_length: int = 262144  # Maximum context length in tokens (adjust based on your model)
-    # tokens_to_generate: int = 81920  # Tokens to reserve for model response
-    
     # Truncation strategy settings
     truncation_strategy: str = "bookend"  # Options: "sequential" (default), "bookend", "smart_bookend", "enhanced"
     
@@ -414,7 +408,7 @@ class LocAgentGenerationTask(GenerationTask):
                     break
 
                 # Check and truncate dialogue history if needed before making the LLM call
-                if hasattr(self.cfg, 'max_seq_length') and self.cfg.max_seq_length > 0:
+                if hasattr(self.cfg, 'max_seq_length') and self.cfg.max_seq_length is not None and self.cfg.max_seq_length > 0:
                     original_turns_count = len(data_point['turns'])
                     
                     # Apply selected truncation strategy
@@ -434,7 +428,7 @@ class LocAgentGenerationTask(GenerationTask):
                         data_point['turns'], truncation_stats = enhanced_truncate_dialogue(
                             data_point['turns'], 
                             self.cfg.max_seq_length, 
-                            self.cfg.tokens_to_generate,
+                            self.cfg.inference.tokens_to_generate,
                             safety_margin=getattr(self.cfg, 'context_safety_margin', 0.9),
                             token_counter=self._token_counter
                         )
@@ -443,12 +437,12 @@ class LocAgentGenerationTask(GenerationTask):
                     elif truncation_strategy == 'bookend' and BOOKEND_TRUNCATION_AVAILABLE:
                         LOG.debug(f"Using bookend truncation strategy")
                         data_point['turns'] = bookend_truncate_dialogue_history(
-                            data_point['turns'], self.cfg.max_seq_length, self.cfg.tokens_to_generate
+                            data_point['turns'], self.cfg.max_seq_length, self.cfg.inference.tokens_to_generate
                         )
                     elif truncation_strategy == 'smart_bookend' and BOOKEND_TRUNCATION_AVAILABLE:
                         LOG.debug(f"Using smart bookend truncation strategy")
                         data_point['turns'] = smart_bookend_truncate(
-                            data_point['turns'], self.cfg.max_seq_length, self.cfg.tokens_to_generate
+                            data_point['turns'], self.cfg.max_seq_length, self.cfg.inference.tokens_to_generate
                         )
                     else:
                         # Default to sequential truncation (backwards compatible)
@@ -456,7 +450,7 @@ class LocAgentGenerationTask(GenerationTask):
                             LOG.warning(f"Truncation strategy '{truncation_strategy}' not available, using sequential")
                         LOG.debug(f"Using sequential truncation strategy")
                         data_point['turns'] = truncate_dialogue_history(
-                            data_point['turns'], self.cfg.max_seq_length, self.cfg.tokens_to_generate
+                            data_point['turns'], self.cfg.max_seq_length, self.cfg.inference.tokens_to_generate
                         )
                     
                     if len(data_point['turns']) < original_turns_count:
