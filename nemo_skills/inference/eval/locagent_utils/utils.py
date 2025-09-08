@@ -531,8 +531,12 @@ def extract_files_from_patch(patch: str) -> List[str]:
     return sorted(list(files))
 
 
-def extract_locations_from_patch(patch: str) -> List[Dict[str, Any]]:
+def extract_locations_from_patch(patch: str, exclude_new_files: bool = True) -> List[Dict[str, Any]]:
     """Extract changed line ranges from a git patch using ORIGINAL file line numbers.
+
+    Args:
+        patch: The git patch string to parse
+        exclude_new_files: If True, excludes locations from newly created files (default: True)
 
     Returns list of dicts: file_path, start_line, end_line, raw.
     Tracks where changes occur in the original file.
@@ -596,7 +600,7 @@ def extract_locations_from_patch(patch: str) -> List[Dict[str, Any]]:
                 if is_new_file:
                     # For new files, track line 1 as the change location
                     # We only add this once per new file
-                    if not any(loc['file_path'] == current_file for loc in locations):
+                    if not exclude_new_files and not any(loc['file_path'] == current_file for loc in locations):
                         locations.append({
                             'file_path': current_file,
                             'start_line': 1,
