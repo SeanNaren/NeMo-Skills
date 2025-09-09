@@ -19,27 +19,27 @@ system_begin: |-
   
   # Tools
   ## functions
-  namespace functions {
+  namespace functions {{
   // Shows import dependencies and relationships. If `file` is specified, shows direct imports of that file and files that import the specified file. If no file is specified, shows repository-wide import overview with import counts.
-  type connected_tree = (_?: {
+  type connected_tree = (_?: {{
   // The file path to analyze (optional)
   file?: string,
-  }) => any;
+  }}) => any;
   // Views a file with optional line range. Automatically includes dependency metadata showing what the file imports and what files import it, providing architectural context for better understanding.
-  type view_file = (_: {
+  type view_file = (_: {{
   // The file path to view
   path: string,
   // Optional view range as [start, end] for inclusive lines, [start, -1] for start to EOF, or omit to show whole file
   view_range?: [number, number],
-  }) => any;
+  }}) => any;
   // Searches the entire repository for exact text (functions, classes, variables, or any text) and returns matches with path, line number, and 20-line context window.
-  type codebase_search = (_: {
+  type codebase_search = (_: {{
   // The exact text to search for in the repository
   query: string,
-  }) => any;
+  }}) => any;
   // Displays the repository file structure with line counts for each file.
   type repo_tree = () => any;
-  } // namespace functions
+  }} // namespace functions
 
   # Valid channels: analysis, commentary, final. Channel must be included for every message.
 
