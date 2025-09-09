@@ -21,11 +21,14 @@ from dataclasses import field
 from pathlib import Path
 
 import hydra
-
 import openai
-from nemo_skills.inference.eval.locagent_utils.utils import (calculate_ground_truth_percentage,
-                                                             extract_locations_from_patch, filter_repo_dict,
-                                                             tree_repo_dict)
+
+from nemo_skills.inference.eval.locagent_utils.utils import (
+    calculate_ground_truth_percentage,
+    extract_locations_from_patch,
+    filter_repo_dict,
+    tree_repo_dict,
+)
 from nemo_skills.inference.generate import GenerateSolutionsConfig, GenerationTask, InferenceConfig
 from nemo_skills.inference.model import server_params
 from nemo_skills.utils import get_help_message, get_logger_name, nested_dataclass, remove_thinking, setup_logging
@@ -34,8 +37,9 @@ from nemo_skills.utils import get_help_message, get_logger_name, nested_dataclas
 try:
     from nemo_skills.inference.eval.locagent_utils.bookend_truncation import (
         bookend_truncate_dialogue_history,
-        smart_bookend_truncate
+        smart_bookend_truncate,
     )
+
     BOOKEND_TRUNCATION_AVAILABLE = True
 except ImportError:
     BOOKEND_TRUNCATION_AVAILABLE = False
@@ -43,11 +47,12 @@ except ImportError:
 # Import loop detection utilities (optional, backwards compatible)
 try:
     from nemo_skills.inference.eval.locagent_utils.loop_detection import (
+        analyze_loop_patterns,
         detect_repetitive_tool_calls,
         inject_loop_intervention,
         prevent_loop_generation,
-        analyze_loop_patterns
     )
+
     LOOP_DETECTION_AVAILABLE = True
 except ImportError:
     LOOP_DETECTION_AVAILABLE = False
@@ -56,9 +61,10 @@ except ImportError:
 try:
     from nemo_skills.inference.eval.locagent_utils.enhanced_context_management import (
         TokenCounter,
+        check_context_before_generation,
         enhanced_truncate_dialogue,
-        check_context_before_generation
     )
+
     ENHANCED_CONTEXT_AVAILABLE = True
 except ImportError:
     ENHANCED_CONTEXT_AVAILABLE = False
@@ -67,8 +73,9 @@ except ImportError:
 try:
     from nemo_skills.inference.eval.locagent_utils.final_turn_prompt import (
         inject_final_turn_instruction,
-        should_inject_final_turn
+        should_inject_final_turn,
     )
+
     FINAL_TURN_PROMPT_AVAILABLE = True
 except ImportError:
     FINAL_TURN_PROMPT_AVAILABLE = False
@@ -238,7 +245,7 @@ class LocalAgentGenerationConfig(GenerateSolutionsConfig):
         ]
     )
 
-    max_seq_length: int | None = None  # Maximum context length in tokens (set via CLI)
+    max_seq_length: int | None = 120000  # Maximum context length in tokens (set via CLI)
 
     # Display settings
     show_line_counts: bool = False  # Show file line counts in repository tree output
@@ -246,21 +253,21 @@ class LocalAgentGenerationConfig(GenerateSolutionsConfig):
 
     # Truncation strategy settings
     truncation_strategy: str = "bookend"  # Options: "sequential" (default), "bookend", "smart_bookend", "enhanced"
-    
+
     # Loop detection settings
     enable_loop_detection: bool = True  # Enable detection and prevention of repetitive tool calls
     loop_detection_threshold: int = 3  # Number of identical calls to trigger loop detection
-    
+
     # Enhanced context management settings
     enable_enhanced_context: bool = True  # Use enhanced context management with better token counting
     context_safety_margin: float = 0.9  # Use only this fraction of max context (0.9 = 90%)
     use_tiktoken: bool = True  # Use tiktoken for accurate token counting if available
-    
+
     # Final turn prompt settings
     enable_final_turn_prompt: bool = True  # Inject instruction on final turn to force location prediction
     final_turn_instruction_type: str = "aligned"  # Type of instruction: aligned, standard, urgent, gentle, detailed
     final_turn_threshold: float = 1.0  # When to trigger (1.0 = only last turn, 0.8 = last 20% of turns)
-    
+
     # Summarization settings (currently disabled, preserved for future use)
     enable_turn_summarization: bool = False  # Enable context summarization to reduce token usage
     max_summary_sentences: int = 5  # Maximum sentences in the investigation summary
@@ -276,7 +283,7 @@ class LocAgentGenerationTask(GenerationTask):
     def __init__(self, cfg: LocalAgentGenerationConfig):
         super().__init__(cfg)
         self.tool_executor = ToolExecutor(cfg)
-        
+
         # Log truncation strategy info
         if not BOOKEND_TRUNCATION_AVAILABLE and cfg.truncation_strategy in ['bookend', 'smart_bookend']:
             LOG.warning(f"Bookend truncation module not available. Falling back to sequential truncation.")
@@ -359,7 +366,7 @@ class LocAgentGenerationTask(GenerationTask):
 
                     # Log debug info if needed
                     LOG.debug(f"Ground truth check debug info: {debug_info}")
-                    
+
                     # Store missing files info for aggregation
                     data_point['_missing_ground_truth_files'] = debug_info.get('missing_files_details', [])
 
@@ -408,32 +415,37 @@ class LocAgentGenerationTask(GenerationTask):
                     break
 
                 # Check and truncate dialogue history if needed before making the LLM call
-                if hasattr(self.cfg, 'max_seq_length') and self.cfg.max_seq_length is not None and self.cfg.max_seq_length > 0:
+                if (
+                    hasattr(self.cfg, 'max_seq_length')
+                    and self.cfg.max_seq_length is not None
+                    and self.cfg.max_seq_length > 0
+                ):
                     original_turns_count = len(data_point['turns'])
-                    
+
                     # Apply selected truncation strategy
                     truncation_strategy = getattr(self.cfg, 'truncation_strategy', 'sequential')
-                    
+
                     # Use enhanced context management if available and enabled
-                    if (ENHANCED_CONTEXT_AVAILABLE and 
-                        getattr(self.cfg, 'enable_enhanced_context', True) and
-                        (truncation_strategy == 'enhanced' or 
-                         getattr(self.cfg, 'use_tiktoken', True))):
+                    if (
+                        ENHANCED_CONTEXT_AVAILABLE
+                        and getattr(self.cfg, 'enable_enhanced_context', True)
+                        and (truncation_strategy == 'enhanced' or getattr(self.cfg, 'use_tiktoken', True))
+                    ):
                         LOG.debug(f"Using enhanced context management")
                         # Initialize token counter if not already done
                         if not hasattr(self, '_token_counter'):
                             self._token_counter = TokenCounter(getattr(self.cfg, 'model', 'gpt-4'))
-                        
+
                         # Use enhanced truncation
                         data_point['turns'], truncation_stats = enhanced_truncate_dialogue(
-                            data_point['turns'], 
-                            self.cfg.max_seq_length, 
+                            data_point['turns'],
+                            self.cfg.max_seq_length,
                             self.cfg.inference.tokens_to_generate,
                             safety_margin=getattr(self.cfg, 'context_safety_margin', 0.9),
-                            token_counter=self._token_counter
+                            token_counter=self._token_counter,
                         )
                         LOG.info(f"Enhanced truncation stats: {truncation_stats}")
-                        
+
                     elif truncation_strategy == 'bookend' and BOOKEND_TRUNCATION_AVAILABLE:
                         LOG.debug(f"Using bookend truncation strategy")
                         data_point['turns'] = bookend_truncate_dialogue_history(
@@ -452,29 +464,39 @@ class LocAgentGenerationTask(GenerationTask):
                         data_point['turns'] = truncate_dialogue_history(
                             data_point['turns'], self.cfg.max_seq_length, self.cfg.inference.tokens_to_generate
                         )
-                    
+
                     if len(data_point['turns']) < original_turns_count:
-                        LOG.info(f"Truncated dialogue from {original_turns_count} to {len(data_point['turns'])} turns using {truncation_strategy} strategy")
+                        LOG.info(
+                            f"Truncated dialogue from {original_turns_count} to {len(data_point['turns'])} turns using {truncation_strategy} strategy"
+                        )
 
                 # Use original data_point for LLM call
                 prepared_data_point = copy.deepcopy(data_point)
-                
+
                 # Loop prevention - check if we should modify the prompt to prevent repetition
-                if LOOP_DETECTION_AVAILABLE and self.cfg.enable_loop_detection and len(chat_history) >= self.cfg.loop_detection_threshold - 1:
+                if (
+                    LOOP_DETECTION_AVAILABLE
+                    and self.cfg.enable_loop_detection
+                    and len(chat_history) >= self.cfg.loop_detection_threshold - 1
+                ):
                     # Check for loops in existing history before generating
-                    is_loop, loop_info = detect_repetitive_tool_calls(chat_history, self.cfg.loop_detection_threshold - 1)
-                    
+                    is_loop, loop_info = detect_repetitive_tool_calls(
+                        chat_history, self.cfg.loop_detection_threshold - 1
+                    )
+
                     if is_loop:
-                        LOG.warning(f"Potential loop detected before generation! Previous {loop_info['total_repetitions']} calls were identical")
+                        LOG.warning(
+                            f"Potential loop detected before generation! Previous {loop_info['total_repetitions']} calls were identical"
+                        )
                         # Inject intervention message to prevent loop continuation
-                        prepared_data_point['turns'] = inject_loop_intervention(prepared_data_point['turns'], loop_info)
-                
+                        prepared_data_point['turns'] = inject_loop_intervention(
+                            prepared_data_point['turns'], loop_info
+                        )
+
                 # Proactive context length check before making LLM call
                 if ENHANCED_CONTEXT_AVAILABLE and getattr(self.cfg, 'enable_enhanced_context', True):
                     will_fit, error_msg, context_stats = check_context_before_generation(
-                        prepared_data_point, 
-                        self.cfg,
-                        getattr(self, '_token_counter', None)
+                        prepared_data_point, self.cfg, getattr(self, '_token_counter', None)
                     )
                     if not will_fit:
                         LOG.error(f"Context length check failed: {error_msg}")
@@ -482,22 +504,21 @@ class LocAgentGenerationTask(GenerationTask):
                         status = "failed"
                         reason = "context_length_exceeded_proactive"
                         break
-                
+
                 # Check if we should inject final turn instruction
                 if FINAL_TURN_PROMPT_AVAILABLE and should_inject_final_turn(
-                    cur_step, 
-                    total_steps, 
+                    cur_step,
+                    total_steps,
                     status,
                     enable_final_turn_prompt=getattr(self.cfg, 'enable_final_turn_prompt', True),
-                    final_turn_threshold=getattr(self.cfg, 'final_turn_threshold', 1.0)
+                    final_turn_threshold=getattr(self.cfg, 'final_turn_threshold', 1.0),
                 ):
                     LOG.info(f"Injecting final turn instruction at step {cur_step + 1}/{total_steps}")
                     prepared_data_point['turns'] = inject_final_turn_instruction(
                         prepared_data_point['turns'],
                         is_final_turn=True,
-                        instruction_type=getattr(self.cfg, 'final_turn_instruction_type', 'standard')
+                        instruction_type=getattr(self.cfg, 'final_turn_instruction_type', 'standard'),
                     )
-
 
                 try:
                     LOG.info(f"Sending {len(prepared_data_point['turns'])} turns to LLM")
@@ -522,26 +543,28 @@ class LocAgentGenerationTask(GenerationTask):
                 total_generated_tokens += llm_output.get('num_generated_tokens', 0)
 
                 chat_history.append(llm_output)
-                
+
                 # Loop detection - check if agent is stuck in a repetitive pattern
-                if LOOP_DETECTION_AVAILABLE and self.cfg.enable_loop_detection and len(chat_history) >= self.cfg.loop_detection_threshold:
+                if (
+                    LOOP_DETECTION_AVAILABLE
+                    and self.cfg.enable_loop_detection
+                    and len(chat_history) >= self.cfg.loop_detection_threshold
+                ):
                     is_loop, loop_info = detect_repetitive_tool_calls(chat_history, self.cfg.loop_detection_threshold)
-                    
+
                     if is_loop:
-                        LOG.warning(f"Loop detected! Agent has repeated the same tool call {loop_info['total_repetitions']} times")
+                        LOG.warning(
+                            f"Loop detected! Agent has repeated the same tool call {loop_info['total_repetitions']} times"
+                        )
                         LOG.debug(f"Loop details: {loop_info}")
-                        
+
                         # Inject intervention to help break the loop
                         data_point['turns'] = inject_loop_intervention(data_point['turns'], loop_info)
-                        
+
                         # Also add a warning to the generation for visibility
-                        loop_warning = {
-                            '_loop_detected': True,
-                            '_loop_info': loop_info,
-                            '_intervention_added': True
-                        }
+                        loop_warning = {'_loop_detected': True, '_loop_info': loop_info, '_intervention_added': True}
                         chat_history[-1].update(loop_warning)
-                        
+
                         # Analyze patterns for debugging
                         pattern_analysis = analyze_loop_patterns(chat_history)
                         LOG.debug(f"Pattern analysis: {pattern_analysis}")
@@ -618,7 +641,7 @@ class LocAgentGenerationTask(GenerationTask):
                         if isinstance(current_turn, dict):
                             current_turn['tool_output'] = tool_output_to_store
                             LOG.debug(f"Added tool output to current turn {len(data_point['turns'])-1}")
-                            
+
                             # Now create a new turn for the next iteration
                             # The new turn has the tool output as input for the assistant to analyze
                             new_turn = {
