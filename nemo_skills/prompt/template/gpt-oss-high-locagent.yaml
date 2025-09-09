@@ -16,7 +16,7 @@ system_begin: |-
   Current date: 2025-08-08
 
   Reasoning: high
-  
+  # Valid channels: analysis, commentary, final. Channel must be included for every message.
   # Tools
   ## functions
   namespace functions {{
@@ -41,7 +41,6 @@ system_begin: |-
   type repo_tree = () => any;
   }} // namespace functions
 
-  # Valid channels: analysis, commentary, final. Channel must be included for every message.
 
 system_end: "<|end|>"
 
