@@ -15,7 +15,6 @@
 import abc
 import logging
 import os
-from typing import Any, Dict, Optional
 
 import httpx
 import litellm
@@ -105,92 +104,12 @@ class BaseModel:
     def __del__(self):
         if self._tunnel:
             self._tunnel.stop()
-        # Clean up any remaining active generations
-        self.cancel_all_generations()
 
-    def get_model_name_from_server(self):
-        model_list = self.client.models.list()
-        if not model_list.data:
-            raise ValueError("No models available on the server.")
-        return model_list.data[0].id
-
-    def _register_generation(self, gen_id: str, response: Any) -> None:
-        """Register a new generation with the tracker."""
-        with self._generations_lock:
-            self.active_generations[gen_id] = {'response': response, 'created_at': time.time()}
-
-    def _unregister_generation(self, gen_id: str) -> Optional[Dict[str, Any]]:
-        """Remove a generation from the tracker and return its info."""
-        with self._generations_lock:
-            return self.active_generations.pop(gen_id, None)
-
-    def cancel_generation(self, gen_id: str) -> bool:
-        """
-        Cancel a specific generation by ID.
-        Returns True if the generation was found and cancelled, False otherwise.
-        """
-        generation_info = self._unregister_generation(gen_id)
-        if generation_info is None:
-            return False
-
-        generation_info['response'].close()
-        return True
-
-    def cancel_all_generations(self) -> int:
-        """
-        Cancel all active generations.
-        Returns the number of generations that were cancelled.
-        """
-        with self._generations_lock:
-            generation_ids = list(self.active_generations.keys())
-
-        cancelled_count = 0
-        for gen_id in generation_ids:
-            if self.cancel_generation(gen_id):
-                cancelled_count += 1
-
-        return cancelled_count
-
-    def get_active_generation_count(self) -> int:
-        """Return the number of currently active generations."""
-        with self._generations_lock:
-            return len(self.active_generations)
-
-    def get_active_generation_ids(self) -> list[str]:
-        """Return a list of all active generation IDs."""
-        with self._generations_lock:
-            return list(self.active_generations.keys())
-
-    def _make_api_call(self, api_func, params, gen_id: str):
-        retry_count = 0
-        retry_delay = self.initial_retry_delay
-        while True:
-            try:
-                response = api_func(**params)
-                # Register the generation after successful API call, only for streaming responses
-                is_streaming = params.get('stream', False)
-                if is_streaming:
-                    self._register_generation(gen_id, response)
-                return response
-            except openai.RateLimitError as e:
-                retry_count += 1
-                if retry_count > self.max_retries:
-                    LOG.error("Rate limit exceeded maximum retry attempts (%d). Giving up.", self.max_retries)
-                    raise
-                retry_after = getattr(e, 'retry_after', None)
-                wait_time = float(retry_after) if retry_after is not None else retry_delay
-                LOG.warning(
-                    "Rate limit exceeded. Retrying in %.2f seconds... (Attempt %d/%d)",
-                    wait_time,
-                    retry_count,
-                    self.max_retries,
-                )
-                time.sleep(wait_time)
-                if retry_after is None:
-                    retry_delay *= 2  # Exponential backoff if no header is provided
-            except Exception as e:
-                LOG.error("Unexpected error during API call: %s", str(e))
-                raise
+    def _maybe_apply_stop_phrase_removal(
+        self, result: dict, remove_stop_phrases: bool, stop_phrases: list[str] | None
+    ) -> None:
+        if remove_stop_phrases:
+            result['generation'] = trim_after_stop_phrases(result['generation'], stop_phrases)
 
     @abc.abstractmethod
     def _build_chat_request_params(self, **kwargs) -> dict:
