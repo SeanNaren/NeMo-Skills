@@ -74,25 +74,25 @@ def get_remaining_jobs(cluster_config, output_dir, random_seeds, chunk_ids, reru
         seed_str = "NONE" if seed is None else str(seed)
         chunk_str = "NONE" if chunk_id is None else str(chunk_id)
         check_commands.append(f'if [ ! -f "{unmounted_path}" ]; then echo "MISSING:{seed_str}:{chunk_str}"; fi')
-    
+
     # Process commands in batches to avoid "Argument list too long" error
     # Use a conservative batch size that works well even with long paths
     batch_size = 30  # Very conservative to handle long file paths
-    
+
     outputs = []
     total_files = len(check_commands)
     LOG.info(f"Checking {total_files} files in batches of {batch_size}...")
-    
+
     for i in range(0, len(check_commands), batch_size):
         batch = check_commands[i : i + batch_size]
         batch_num = i // batch_size + 1
         total_batches = (len(check_commands) + batch_size - 1) // batch_size
-        
+
         if total_files > 100:  # Show progress for large file sets
             LOG.info(f"Processing batch {batch_num}/{total_batches}...")
-        
+
         command = f"bash -c '{'; '.join(batch)}'"
-        
+
         try:
             if cluster_config['executor'] == 'slurm':
                 out = get_tunnel(cluster_config).run(command).stdout.strip()
@@ -109,12 +109,14 @@ def get_remaining_jobs(cluster_config, output_dir, random_seeds, chunk_ids, reru
                     if cluster_config['executor'] == 'slurm':
                         out = get_tunnel(cluster_config).run(single_command).stdout.strip()
                     else:
-                        out = subprocess.run(single_command, shell=True, check=True, stdout=subprocess.PIPE).stdout.decode("utf-8")
+                        out = subprocess.run(
+                            single_command, shell=True, check=True, stdout=subprocess.PIPE
+                        ).stdout.decode("utf-8")
                     if out:
                         outputs.append(out)
                 except Exception as inner_e:
                     LOG.error(f"Failed to check file {i+j+1}/{total_files}: {inner_e}")
-    
+
     output = "\n".join(outputs)
 
     # Parse results into a mapping of missing jobs
@@ -211,7 +213,7 @@ def get_generation_cmd(
         cmd += (
             f"    ++inference.random_seed={random_seed} "
             f"    ++inference.temperature=0.7 "
-            f"    ++inference.top_k=0 "
+            f"    ++inference.top_k=-1 "
             f"    ++inference.top_p=0.95 "
         )
 
@@ -278,7 +280,7 @@ def wrap_cmd(cmd, preprocess_cmd, postprocess_cmd, random_seed=None, wandb_param
         cmd = f" {preprocess_cmd} && {cmd} "
     if postprocess_cmd:
         if random_seed is not None:
-            postprocess_cmd = postprocess_cmd.format(random_seed=random_seed)
+            postprocess_cmd = postprocess_cmd.replace("{random_seed}", str(random_seed))
         cmd = f" {cmd} && {postprocess_cmd} "
     if wandb_parameters:
         log_wandb_cmd = (
@@ -341,7 +343,7 @@ def configure_client(
         }
         extra_arguments = (
             f"{extra_arguments} ++server.server_type={server_type} "
-            f"++server.host=localhost ++server.port={server_port} "
+            f"++server.host=localhost ++server.port={server_port} ++server.model={model} "
         )
     else:  # model is hosted elsewhere
         server_config = None
