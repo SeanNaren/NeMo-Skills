@@ -25,20 +25,24 @@ system_begin: |-
   // The file path to analyze (optional)
   file?: string,
   }}) => any;
-  // Views a file with optional line range. Automatically includes dependency metadata showing what the file imports and what files import it, providing architectural context for better understanding.
+
+  // Views a file with optional line range.
   type view_file = (_: {{
   // The file path to view
   path: string,
   // Optional view range as [start, end] for inclusive lines, [start, -1] for start to EOF, or omit to show whole file
   view_range?: [number, number],
   }}) => any;
+
   // Searches the entire repository for exact text (functions, classes, variables, or any text) and returns matches with path, line number, and 20-line context window.
   type codebase_search = (_: {{
   // The exact text to search for in the repository
   query: string,
   }}) => any;
+
   // Displays the repository file structure with line counts for each file.
   type repo_tree = () => any;
+
   }} // namespace functions
 
 

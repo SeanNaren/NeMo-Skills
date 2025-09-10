@@ -1,6 +1,8 @@
 # default prompt for livecodebench c++
 
-system: |-
+system: ""
+
+user: |-
   You are a **bug-localisation assistant**.
 
   **Primary Goal**
@@ -53,4 +55,4 @@ system: |-
   - Use **`view_file`**, **`repo_tree`**, **`connected_tree`**, and **`codebase_search`** exactly as defined—never invent tool names or parameters
   - Do not emit `<locations>` until you are confident you have found **all** necessary edit locations
 
-user: "{inputs}"
+  {inputs}
