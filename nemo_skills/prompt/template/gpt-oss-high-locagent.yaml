@@ -17,6 +17,9 @@ system_begin: |-
 
   Reasoning: high
   # Valid channels: analysis, commentary, final. Channel must be included for every message.
+  Calls to these tools must go to the commentary channel: 'functions'.<|end|><|start|>developer<|message|># Instructions
+  Ensure that the tool calls you make only provide the arguments as specified in the tool description. Do not make up any arguments or it will fail.
+  You are to assist in finding relevant locations to fix the bug in the codebase, do not fix the issue. Just use the tools to find the location of the issue.
   # Tools
   ## functions
   namespace functions {{
