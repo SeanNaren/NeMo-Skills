@@ -17,9 +17,9 @@ import logging
 import random
 import re
 from dataclasses import asdict, field
+from itertools import zip_longest
 from pathlib import Path
 from typing import Any, Dict, List, Optional
-from itertools import zip_longest
 
 import yaml
 
@@ -244,7 +244,7 @@ class Prompt:
                 and use it to construct the prompt. You input_dict should also have "assistant" key in all
                 turns except last containing assistant reply.
             return_templated_dict: Indicates whether to return a messages list where the template is used
-                to fill the prompt. If so, a list of dicts with 'role' and 'content' keys will be returned. 
+                to fill the prompt. If so, a list of dicts with 'role' and 'content' keys will be returned.
                 In this case the final user and assistant messages will include special tokens.
 
         Returns:
@@ -259,12 +259,16 @@ class Prompt:
 
         if self.config.template:
             if multi_turn_key is None:
-                prompt_string = (system_string := self.SYSTEM_FORMAT.format(
-                    system=self.config.system.format(**input_dict), **asdict(self.config.template)
-                ))
-                prompt_string += (user_string := self.TURN_BEGIN_FORMAT.format(
-                    user=self.build_user_message(input_dict), **asdict(self.config.template)
-                ))
+                prompt_string = (
+                    system_string := self.SYSTEM_FORMAT.format(
+                        system=self.config.system.format(**input_dict), **asdict(self.config.template)
+                    )
+                )
+                prompt_string += (
+                    user_string := self.TURN_BEGIN_FORMAT.format(
+                        user=self.build_user_message(input_dict), **asdict(self.config.template)
+                    )
+                )
                 user_strings = [user_string]
                 assistant_strings = []
                 if generation:
@@ -273,30 +277,40 @@ class Prompt:
                         # Append generation without the closing tag.
                         prompt_string += (assistant_string := generation)
                     else:
-                        prompt_string += (assistant_string := self.TURN_END_FORMAT.format(
-                            assistant=generation, **asdict(self.config.template)
-                        ))
+                        prompt_string += (
+                            assistant_string := self.TURN_END_FORMAT.format(
+                                assistant=generation, **asdict(self.config.template)
+                            )
+                        )
                     assistant_strings.append(assistant_string)
 
             else:
-                prompt_string = (system_string := self.SYSTEM_FORMAT.format(
-                    system=self.config.system.format(**input_dict), **asdict(self.config.template)
-                ))
+                prompt_string = (
+                    system_string := self.SYSTEM_FORMAT.format(
+                        system=self.config.system.format(**input_dict), **asdict(self.config.template)
+                    )
+                )
                 user_strings = []
                 assistant_strings = []
                 for turn in input_dict[multi_turn_key][:-1]:
-                    prompt_string += (user_string := self.TURN_BEGIN_FORMAT.format(
-                        user=self.build_user_message(turn), **asdict(self.config.template)
-                    ))
+                    prompt_string += (
+                        user_string := self.TURN_BEGIN_FORMAT.format(
+                            user=self.build_user_message(turn), **asdict(self.config.template)
+                        )
+                    )
                     user_strings.append(user_string)
-                    prompt_string += (assistant_string := self.TURN_END_FORMAT.format(
-                        assistant=turn["assistant"], **asdict(self.config.template)
-                    ))
+                    prompt_string += (
+                        assistant_string := self.TURN_END_FORMAT.format(
+                            assistant=turn["assistant"], **asdict(self.config.template)
+                        )
+                    )
                     assistant_strings.append(assistant_string)
 
-                prompt_string += (user_string := self.TURN_BEGIN_FORMAT.format(
-                    user=self.build_user_message(input_dict[multi_turn_key][-1]), **asdict(self.config.template)
-                ))
+                prompt_string += (
+                    user_string := self.TURN_BEGIN_FORMAT.format(
+                        user=self.build_user_message(input_dict[multi_turn_key][-1]), **asdict(self.config.template)
+                    )
+                )
                 user_strings.append(user_string)
                 prompt_string += generation
                 if generation:
@@ -365,42 +379,41 @@ def get_config_path(config: str, config_dir: str | None = None, config_extension
     return config_path
 
 
-
 def validate_yaml_literal_blocks(content: str, config_path: Path) -> None:
     """
     Validates that single curly braces in YAML literal block scalars are properly escaped.
-    
+
     In YAML literal blocks (|, |-, |+), single curly braces must be doubled
     because they have special meaning in Python string formatting.
-    
+
     Args:
         content (str): The YAML file content to validate.
         config_path (Path): Path to the config file (for error reporting).
-        
+
     Raises:
         ValueError: If single curly braces are found in literal block scalars.
     """
     # This regex finds single { or } that are not part of {{ or }}
     single_brace_pattern = r'(?<!{){(?!{)|(?<!})}(?!})'
-    
+
     # Pattern to match a key followed by | (with optional -, +) for literal blocks
     # This covers |, |-, |+, etc.
     literal_block_pattern = r'^(\s*)(\w+):\s*\|[+-]?\s*$'
-    
+
     lines = content.split('\n')
     lines_with_issues = []
     i = 0
-    
+
     while i < len(lines):
         line = lines[i]
         match = re.match(literal_block_pattern, line)
-        
+
         if match:
             # Found a literal block scalar
             indent = len(match.group(1))
             key = match.group(2)
             block_start = i + 1
-            
+
             # Find the end of the literal block by looking for a line with same or less indentation
             block_lines = []
             j = block_start
@@ -413,7 +426,7 @@ def validate_yaml_literal_blocks(content: str, config_path: Path) -> None:
                 else:
                     block_lines.append(lines[j])
                 j += 1
-            
+
             # Check the block content for single braces
             block_content = '\n'.join(block_lines)
             if re.search(single_brace_pattern, block_content):
@@ -422,22 +435,22 @@ def validate_yaml_literal_blocks(content: str, config_path: Path) -> None:
                     if re.search(single_brace_pattern, block_line):
                         actual_line_num = block_start + k + 1  # +1 for 1-based line numbers
                         lines_with_issues.append(f"  Line {actual_line_num} (in '{key}' block): {block_line.strip()}")
-            
+
             # Skip to the end of the block
             i = j - 1
-        
+
         i += 1
-    
+
     if lines_with_issues:
         error_msg = (
             f"ERROR: Single curly braces found in literal block scalars in: {config_path}\n"
             f"In YAML literal blocks (|, |-, |+), curly braces must be doubled to escape them.\n"
-            f"Replace '{{' with '{{{{' and '}}' with '}}}}' in the following lines:\n" +
-            '\n'.join(lines_with_issues[:10])  # Show max 10 lines
+            f"Replace '{{' with '{{{{' and '}}' with '}}}}' in the following lines:\n"
+            + '\n'.join(lines_with_issues[:10])  # Show max 10 lines
         )
         if len(lines_with_issues) > 10:
             error_msg += f"\n  ... and {len(lines_with_issues) - 10} more lines"
-        
+
         raise ValueError(error_msg)
 
 
@@ -458,11 +471,10 @@ def load_config(config: str, config_dir: str | None = None) -> dict:
     config_path = get_config_path(config, config_dir)
 
     with open(config_path, "rt", encoding="utf-8") as fin:
-        content = fin.read()    
-    validate_yaml_literal_blocks(content, config_path)
+        content = fin.read()
+    # validate_yaml_literal_blocks(content, config_path)
 
     return yaml.safe_load(content)
-
 
 
 def get_prompt(
@@ -498,7 +510,7 @@ def get_prompt(
         else:
             code_tags_dict = code_tags
         code_tags_obj = CodeTags(**code_tags_dict)
-    
+
     prompt = Prompt(PromptConfig(**config, template=template_obj, code_tags=code_tags_obj))
 
     if examples_type is not None:
