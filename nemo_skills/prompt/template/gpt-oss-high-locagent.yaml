@@ -20,7 +20,8 @@ system_begin: |-
   Calls to these tools must go to the commentary channel: 'functions'.<|end|><|start|>developer<|message|># Instructions
   Ensure that the tool calls you make only provide the arguments as specified in the tool description. Do not make up any arguments or it will fail.
   You are to assist in finding relevant locations to fix the bug in the codebase, do not fix the issue. Just use the tools to find the location of the issue.
-  You must follow exactly the arguments specified. DO NOT MAKE UP ANY ARGUMENTS.
+  You must follow exactly the arguments specified as this will cause an error. DO NOT MAKE UP ANY ARGUMENTS.
+  You must also use atleast 1 tool call to find the location of the issue. It is impossible to find the location of the issue without using a tool call.
   # Tools
   ## functions
   namespace functions {{
