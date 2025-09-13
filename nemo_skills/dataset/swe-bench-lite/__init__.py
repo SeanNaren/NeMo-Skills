@@ -13,10 +13,10 @@
 # limitations under the License.
 
 # settings that define how evaluation should be done by default (all can be changed from cmdline)
-PROMPT_CONFIG = 'eval/locagent/system'
+PROMPT_CONFIG = 'eval/artsiv/system'
 DATASET_GROUP = 'code'
-METRICS_TYPE = 'locagent'
-EVAL_ARGS = "++eval_type=locagent"
+METRICS_TYPE = 'artsiv'
+EVAL_ARGS = "++eval_type=artsiv"
 GENERATION_ARGS = ""
-GENERATION_MODULE = "nemo_skills.inference.eval.locagent"
+GENERATION_MODULE = "nemo_skills.inference.eval.artsiv"
 REQUIRES_SANDBOX = False

@@ -84,7 +84,7 @@ class SciCodeMetrics(BaseMetrics):
         self.subtasks_total = 0
 
 
-class LocAgentMetrics(BaseMetrics):
+class ArtsivMetrics(BaseMetrics):
     def __init__(self):
         super().__init__()
         self.file_level_metrics = []
