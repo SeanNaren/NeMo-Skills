@@ -301,7 +301,7 @@ class ArtsivMetrics(BaseMetrics):
         metrics = metrics_data[eval_mode]
         
         print(f"\n{'=' * 80}")
-        print(f" {benchmark_name} - Detailed LocAgent Evaluation Results ".center(80, '='))
+        print(f" {benchmark_name} - Detailed Artsiv Evaluation Results ".center(80, '='))
         print(f"{'=' * 80}")
         
         # Processing Statistics section

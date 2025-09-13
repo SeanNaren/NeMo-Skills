@@ -474,14 +474,14 @@ def _execute_single_test(args):
     return elem_idx, output_dict
 
 
-def eval_metrics(eval_config, locagent_data):
+def eval_metrics(eval_config, artsiv_data):
     json_idx = {}
 
-    for prob_data in locagent_data:
-        json_idx[prob_data['instance_id']] = locagent_data.index(prob_data)
+    for prob_data in artsiv_data:
+        json_idx[prob_data['instance_id']] = artsiv_data.index(prob_data)
 
     # Initialize status_lists with correct structure
-    status_lists = [[] for _ in range(len(locagent_data))]
+    status_lists = [[] for _ in range(len(artsiv_data))]
     
     # Prepare all tasks for parallel execution
     tasks = []
@@ -497,7 +497,7 @@ def eval_metrics(eval_config, locagent_data):
         'not_in_repository': []
     }
     
-    for elem_idx, elem in enumerate(locagent_data):
+    for elem_idx, elem in enumerate(artsiv_data):
         # Collect ground truth in repo percentage if available
         if 'ground_truth_in_repo_percentage' in elem:
             ground_truth_percentages.append(elem['ground_truth_in_repo_percentage'])
@@ -588,7 +588,7 @@ def eval_metrics(eval_config, locagent_data):
         tasks.append((eval_config, elem_idx, ground_truth_locations, elem["locations"]))
         # for step_id, full_generation in elem['generation'].items():
         #     instance_id, subtask_step = step_id.split('.')
-        #     json_content = locagent_data[json_idx[instance_id]]
+        #     json_content = artsiv_data[json_idx[instance_id]]
         #     tasks.append((eval_config, elem_idx, full_generation, json_content, subtask_step))
 
     # Calculate ground truth presence statistics
@@ -609,7 +609,7 @@ def eval_metrics(eval_config, locagent_data):
         }
     
     # Log processing statistics
-    total_samples = len(locagent_data)
+    total_samples = len(artsiv_data)
     LOG.info(f"Processing statistics:")
     LOG.info(f"  Total samples: {total_samples}")
     LOG.info(f"  Successful samples: {successful_samples}")
