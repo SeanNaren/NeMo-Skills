@@ -73,6 +73,8 @@ try:
 except ImportError:
     FINAL_TURN_PROMPT_AVAILABLE = False
 
+# Response length management functions are now in dialog_processor
+
 PROMPT_TEMPLATE_VERSION: str = "v4"
 
 
@@ -261,11 +263,16 @@ class LocalAgentGenerationConfig(GenerateSolutionsConfig):
     final_turn_instruction_type: str = "aligned"  # Type of instruction: aligned, standard, urgent, gentle, detailed
     final_turn_threshold: float = 1.0  # When to trigger (1.0 = only last turn, 0.8 = last 20% of turns)
     
-    # Summarization settings (currently disabled, preserved for future use)
-    enable_turn_summarization: bool = False  # Enable context summarization to reduce token usage
-    max_summary_sentences: int = 5  # Maximum sentences in the investigation summary
-    min_turns_for_summarization: int = 10  # Minimum turns before summarization kicks in
-    summarization_model: bool = False  # Whether to use LLM for summarization
+    # Response length management settings (SUCCESSFUL RUN CONFIGURATION)
+    enable_response_length_management: bool = True  # Monitor and control response lengths
+    max_response_tokens: int = 60000  # Maximum tokens per normal response
+    max_thinking_tokens: int = 70000  # Maximum tokens for responses with thinking
+    max_final_turn_tokens: int = 40000  # Maximum tokens for final turn
+    response_length_retry_limit: int = 20000  # Strict token limit for retries after length failures
+    enable_response_truncation: bool = True  # Truncate overly long responses
+    inject_length_warnings: bool = True  # Inject warnings when responses are too long
+    max_allowed_generation_tokens: int = 75000  # Hard cap to ensure buffer for proper completion
+    generation_buffer_tokens: int = 5000  # Reserve tokens to ensure model can complete its output
 
 
 cs = hydra.core.config_store.ConfigStore.instance()
@@ -274,6 +281,23 @@ cs.store(name="base_locagent_generation_config", node=LocalAgentGenerationConfig
 
 class LocAgentGenerationTask(GenerationTask):
     def __init__(self, cfg: LocalAgentGenerationConfig):
+        # Ensure we have a buffer for model to complete its output
+        original_tokens = cfg.inference.tokens_to_generate
+        if cfg.enable_response_length_management:
+            # Always reserve some tokens for the model to properly complete its response
+            safe_limit = original_tokens - cfg.generation_buffer_tokens
+            if safe_limit < cfg.max_allowed_generation_tokens:
+                effective_limit = safe_limit
+            else:
+                effective_limit = cfg.max_allowed_generation_tokens
+            
+            if original_tokens > effective_limit:
+                LOG.warning(
+                    f"Adjusting tokens_to_generate from {original_tokens} to {effective_limit} "
+                    f"to ensure {cfg.generation_buffer_tokens} token buffer for response completion."
+                )
+                cfg.inference.tokens_to_generate = effective_limit
+        
         super().__init__(cfg)
         self.tool_executor = ToolExecutor(cfg)
         
@@ -499,27 +523,133 @@ class LocAgentGenerationTask(GenerationTask):
                     )
 
 
-                try:
-                    LOG.info(f"Sending {len(prepared_data_point['turns'])} turns to LLM")
-                    llm_output = await super().process_single_datapoint(prepared_data_point, all_data)
-                # TODO: this is a hack (as not all servers return that),
-                # but eventually we should support handling errors like this globally for all generations
-                except openai.BadRequestError as e:
-                    if 'Please reduce the length of the messages or completion' in str(e):
-                        LOG.warning(
-                            "LocAgent generation failed due to running out of context. "
-                            "Failing for subsequent subtasks automatically.",
+                # Determine response type for token limits
+                response_type = 'normal'
+                if cur_step == total_steps - 1:
+                    response_type = 'final_turn'
+                
+                # Calculate safe generation limit if response length management is enabled
+                safe_generation_limit = None
+                if self.cfg.enable_response_length_management:
+                    if hasattr(self, '_token_counter') and self.cfg.max_seq_length:
+                        from nemo_skills.inference.eval.locagent_utils.enhanced_context_management import count_dialogue_tokens
+                        current_tokens = count_dialogue_tokens(prepared_data_point['turns'], self._token_counter)
+                        safe_generation_limit = dialog_processor.calculate_safe_token_limit(
+                            current_tokens, 
+                            self.cfg.max_seq_length,
+                            self.cfg.context_safety_margin
                         )
-                        status = "failed"
-                        reason = "context_length_exceeded"
+                        LOG.debug(f"Safe generation limit: {safe_generation_limit} tokens")
+                
+                # Track retry attempts for this turn
+                retry_count = 0
+                max_retries = 2
+                
+                while retry_count <= max_retries:
+                    try:
+                        LOG.info(f"Sending {len(prepared_data_point['turns'])} turns to LLM (attempt {retry_count + 1})")
+                        
+                        # Override tokens_to_generate for retries with stricter limits
+                        if retry_count > 0:
+                            original_tokens_to_generate = self.cfg.inference.tokens_to_generate
+                            self.cfg.inference.tokens_to_generate = self.cfg.response_length_retry_limit
+                            LOG.warning(f"Retry {retry_count}: Using stricter token limit of {self.cfg.response_length_retry_limit}")
+                        
+                        llm_output = await super().process_single_datapoint(prepared_data_point, all_data)
+                        
+                        # Restore original tokens_to_generate
+                        if retry_count > 0:
+                            self.cfg.inference.tokens_to_generate = original_tokens_to_generate
+                        
+                        # Check response length if management is enabled
+                        if self.cfg.enable_response_length_management:
+                            # Determine max tokens based on response type and content
+                            has_thinking = '_has_think_tags' in llm_output and llm_output['_has_think_tags']
+                            if has_thinking:
+                                max_tokens = self.cfg.max_thinking_tokens
+                                check_type = 'thinking'
+                            elif response_type == 'final_turn':
+                                max_tokens = self.cfg.max_final_turn_tokens
+                                check_type = 'final_turn'
+                            else:
+                                max_tokens = self.cfg.max_response_tokens
+                                check_type = 'normal'
+                            
+                            # Check the full generation including thinking
+                            full_gen = llm_output.get('_full_generation', llm_output.get('generation', ''))
+                            is_acceptable, warning_msg, stats = dialog_processor.check_response_length(
+                                full_gen, check_type, max_tokens
+                            )
+                            
+                            if warning_msg:
+                                LOG.warning(f"Response length check: {warning_msg}")
+                                LOG.debug(f"Response stats: {stats}")
+                            
+                            # If response is too long and we haven't exceeded retries
+                            if not is_acceptable and retry_count < max_retries:
+                                LOG.error(f"Response too long: {stats['estimated_tokens']} tokens")
+                                
+                                # Analyze the failure
+                                failure_analysis = dialog_processor.analyze_response_failure(
+                                    full_gen, 
+                                    prepared_data_point['turns'],
+                                    self.cfg.max_seq_length or 128000
+                                )
+                                LOG.info(f"Failure analysis: {failure_analysis}")
+                                
+                                # Inject warning for next attempt
+                                if self.cfg.inject_length_warnings:
+                                    prepared_data_point['turns'] = dialog_processor.inject_length_warning(
+                                        prepared_data_point['turns'],
+                                        f"Previous response was too long ({stats['estimated_tokens']} tokens). Maximum allowed: {max_tokens} tokens"
+                                    )
+                                
+                                retry_count += 1
+                                continue
+                            
+                            # If still too long after retries, truncate if enabled
+                            elif not is_acceptable and self.cfg.enable_response_truncation:
+                                LOG.warning(f"Truncating response after {retry_count} retries")
+                                llm_output['generation'] = dialog_processor.truncate_excessive_response(
+                                    llm_output['generation'], max_tokens
+                                )
+                                if '_full_generation' in llm_output:
+                                    llm_output['_full_generation'] = dialog_processor.truncate_excessive_response(
+                                        llm_output['_full_generation'], max_tokens
+                                    )
+                        
+                        # Success - break out of retry loop
                         break
-                    # For any other BadRequestError, also fail gracefully and store the error
-                    LOG.warning(f"LocAgent generation failed with BadRequestError: {e}")
-                    status = "failed"
-                    reason = f"bad_request_error: {str(e)}"
-                    break
+                        
+                    # TODO: this is a hack (as not all servers return that),
+                    # but eventually we should support handling errors like this globally for all generations
+                    except openai.BadRequestError as e:
+                        if 'Please reduce the length of the messages or completion' in str(e) or 'is longer than the model\'s context length' in str(e):
+                            LOG.warning(
+                                "LocAgent generation failed due to running out of context. "
+                                "Failing for subsequent subtasks automatically.",
+                            )
+                            status = "failed"
+                            reason = "context_length_exceeded"
+                            break
+                        # For any other BadRequestError, also fail gracefully and store the error
+                        LOG.warning(f"LocAgent generation failed with BadRequestError: {e}")
+                        status = "failed"
+                        reason = f"bad_request_error: {str(e)}"
+                        break
 
-                total_generated_tokens += llm_output.get('num_generated_tokens', 0)
+                # Check if generation was likely cut off at token limit
+                generated_tokens = llm_output.get('num_generated_tokens', 0)
+                total_generated_tokens += generated_tokens
+                
+                # If we generated exactly the token limit, it's likely we were cut off
+                if generated_tokens == self.cfg.inference.tokens_to_generate:
+                    LOG.warning(
+                        f"Model generated exactly {generated_tokens} tokens (the configured limit). "
+                        f"Response was likely truncated. Consider the response incomplete."
+                    )
+                    # Add a flag to track this
+                    llm_output['_likely_truncated'] = True
 
                 chat_history.append(llm_output)
                 
@@ -563,9 +693,19 @@ class LocAgentGenerationTask(GenerationTask):
 
                 if not extracted_block:
                     LOG.warning("Model failed to generate a tool use or location. Ending generation.")
-                    # todo (hov): add resampling with different temperature if necessary.
-                    status = "failed"
-                    reason = "no_tool_or_location_generated"
+                    # Check if this was due to truncation at token limit
+                    if llm_output.get('_likely_truncated', False):
+                        status = "failed"
+                        reason = "response_truncated_at_token_limit"
+                        LOG.error(
+                            f"Response was truncated at token limit ({generated_tokens} tokens) "
+                            f"and no valid tool/location was extracted. The model needs more tokens "
+                            f"to complete its response, but a buffer should have been reserved."
+                        )
+                    else:
+                        # todo (hov): add resampling with different temperature if necessary.
+                        status = "failed"
+                        reason = "no_tool_or_location_generated"
                     break
 
                 # Safely add assistant response to the current turn

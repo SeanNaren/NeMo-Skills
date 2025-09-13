@@ -1121,6 +1121,7 @@ class DialogProcessor:
         for line in locations_text.split("\n"):
             line = line.strip()
             if line and not line.startswith("#"):
+                # Try to match range format first: file:L<start>-L<end>
                 location_match = re.match(r"([^:]+):L(\d+)-L(\d+)", line)
                 if location_match:
                     file_path, start_line, end_line = location_match.groups()
@@ -1131,7 +1132,18 @@ class DialogProcessor:
                         "raw": line
                     })
                 else:
-                    locations.append({"raw": line})
+                    # Try to match single line format: file:L<line>
+                    single_line_match = re.match(r"([^:]+):L(\d+)", line)
+                    if single_line_match:
+                        file_path, line_num = single_line_match.groups()
+                        locations.append({
+                            "file_path": file_path,
+                            "start_line": int(line_num),
+                            "end_line": int(line_num),  # Same as start for single line
+                            "raw": line
+                        })
+                    else:
+                        locations.append({"raw": line})
 
         return {"type": "locations", "locations": locations}
 
@@ -1296,7 +1308,7 @@ class DialogProcessor:
                 search_term = re.sub(r'[\'"]', "", search_term)
                 # Filter out common words that shouldn't be searched
                 common_words_list = getattr(config, 'common_words_filter', None) if config else None
-                common_words = set(common_words_list)
+                common_words = set(common_words_list) if common_words_list else set()
                 if (
                     search_term
                     and len(search_term) > 2  # Ensure it's not just a short word
@@ -1308,7 +1320,7 @@ class DialogProcessor:
                         "query": search_term,
                     }
                     LOG.info(f"Found implicit search request: {tool_data['query']}")
-                    return {"type": "tool_calls", 'tool_call': tool_data}
+                    return {"type": "tool_calls", "tool_call": tool_data}
 
         # Check for empty JSON object (repo_tree tool)
         empty_json_match = re.search(r"^\s*\{\s*\}\s*$", dialog_text.strip())
@@ -1336,3 +1348,205 @@ class DialogProcessor:
 
         LOG.warning("No <tool_call>, <locations>, or implicit tool calls found in dialog output")
         return None
+
+
+# Response Length Management Functions
+# (Moved from response_length_management.py for better organization)
+
+# Default token limits for different response types
+DEFAULT_MAX_RESPONSE_TOKENS = {
+    'normal': 8192,  # Regular response with tool calls
+    'thinking': 16384,  # Response with thinking tags (allows more)
+    'final_turn': 4096,  # Final turn should be concise
+    'retry': 2048,  # Strict limit for retries after length failures
+}
+
+# Warning thresholds (percentage of max)
+WARNING_THRESHOLD = 0.75
+CRITICAL_THRESHOLD = 0.9
+
+
+def check_response_length(
+    response: str,
+    response_type: str = 'normal',
+    custom_max_tokens: Optional[int] = None
+) -> tuple[bool, str, Dict]:
+    """
+    Check if a response is within acceptable length limits.
+    
+    Args:
+        response: The generated response text
+        response_type: Type of response ('normal', 'thinking', 'final_turn', 'retry')
+        custom_max_tokens: Override the default max tokens for this type
+        
+    Returns:
+        Tuple of (is_acceptable, warning_message, stats)
+    """
+    estimated_tokens = estimate_tokens(response)
+    max_tokens = custom_max_tokens or DEFAULT_MAX_RESPONSE_TOKENS.get(response_type, DEFAULT_MAX_RESPONSE_TOKENS['normal'])
+    
+    stats = {
+        'estimated_tokens': estimated_tokens,
+        'max_tokens': max_tokens,
+        'percentage': (estimated_tokens / max_tokens) * 100 if max_tokens > 0 else 0,
+        'response_type': response_type
+    }
+    
+    if estimated_tokens > max_tokens:
+        warning = f"Response exceeds token limit: {estimated_tokens} > {max_tokens} ({stats['percentage']:.1f}%)"
+        return False, warning, stats
+    elif estimated_tokens > max_tokens * CRITICAL_THRESHOLD:
+        warning = f"Response approaching token limit: {estimated_tokens}/{max_tokens} ({stats['percentage']:.1f}%)"
+        return True, warning, stats
+    elif estimated_tokens > max_tokens * WARNING_THRESHOLD:
+        warning = f"Response length warning: {estimated_tokens}/{max_tokens} ({stats['percentage']:.1f}%)"
+        return True, warning, stats
+    else:
+        return True, "", stats
+
+
+def truncate_excessive_response(
+    response: str,
+    max_tokens: int,
+    preserve_structure: bool = True
+) -> str:
+    """
+    Truncate an excessively long response while trying to preserve structure.
+    
+    Args:
+        response: The response to truncate
+        max_tokens: Maximum allowed tokens
+        preserve_structure: Try to preserve XML tag structure if True
+        
+    Returns:
+        Truncated response
+    """
+    target_chars = max_tokens * 4  # Rough conversion
+    
+    if len(response) <= target_chars:
+        return response
+    
+    if not preserve_structure:
+        return response[:target_chars] + "\n[TRUNCATED DUE TO LENGTH]"
+    
+    # Try to preserve XML structure
+    truncated = response[:target_chars]
+    
+    # Find last complete tag
+    last_close = truncated.rfind('>')
+    if last_close > 0:
+        truncated = truncated[:last_close + 1]
+    
+    # Check for unclosed tags and try to close them
+    open_tags = []
+    
+    # Find all tags
+    for match in re.finditer(r'<(/?)(\w+)[^>]*>', truncated):
+        is_closing = match.group(1) == '/'
+        tag_name = match.group(2)
+        
+        if is_closing:
+            if open_tags and open_tags[-1] == tag_name:
+                open_tags.pop()
+        else:
+            open_tags.append(tag_name)
+    
+    # Close any remaining open tags
+    for tag in reversed(open_tags):
+        truncated += f"</{tag}>"
+    
+    truncated += "\n[TRUNCATED DUE TO LENGTH]"
+    return truncated
+
+
+def inject_length_warning(turns: List[Dict], warning_message: str) -> List[Dict]:
+    """
+    Inject a warning about response length into the conversation.
+    
+    Args:
+        turns: The conversation turns
+        warning_message: Warning to inject
+        
+    Returns:
+        Updated turns with warning
+    """
+    warning_turn = {
+        "inputs": f"[SYSTEM WARNING: {warning_message}. Please provide a more concise response focusing only on the essential information needed to locate the bug.]",
+        "assistant": "",
+        "tool_call": None,
+        "tool_output": "",
+    }
+    
+    return turns + [warning_turn]
+
+
+def calculate_safe_token_limit(
+    current_context_tokens: int,
+    max_context_length: int,
+    safety_margin: float = 0.9,
+    min_generation_tokens: int = 1024
+) -> int:
+    """
+    Calculate a safe token limit for the next generation.
+    
+    Args:
+        current_context_tokens: Tokens used by current context
+        max_context_length: Maximum context length
+        safety_margin: Safety margin (0.9 = use only 90% of max)
+        min_generation_tokens: Minimum tokens to allow for generation
+        
+    Returns:
+        Safe token limit for next generation
+    """
+    safe_max = int(max_context_length * safety_margin)
+    available = safe_max - current_context_tokens
+    
+    # Ensure we have at least minimum generation space
+    if available < min_generation_tokens:
+        LOG.warning(f"Very limited generation space: {available} tokens available")
+        return min_generation_tokens
+    
+    # Use a conservative limit to prevent overflow
+    return min(available, DEFAULT_MAX_RESPONSE_TOKENS['normal'])
+
+
+def analyze_response_failure(
+    response: str,
+    turns: List[Dict],
+    max_context_length: int
+) -> Dict:
+    """
+    Analyze why a response generation failed due to length.
+    
+    Returns detailed diagnostics about the failure.
+    """
+    # Count tokens in different parts
+    thinking_pattern = r'<think>(.*?)</think>'
+    tool_pattern = r'<tool_call>(.*?)</tool_call>'
+    
+    thinking_matches = re.findall(thinking_pattern, response, re.DOTALL)
+    tool_matches = re.findall(tool_pattern, response, re.DOTALL)
+    
+    thinking_chars = sum(len(m) for m in thinking_matches)
+    tool_chars = sum(len(m) for m in tool_matches)
+    other_chars = len(response) - thinking_chars - tool_chars
+    
+    analysis = {
+        'total_response_tokens': estimate_tokens(response),
+        'thinking_tokens': estimate_tokens(''.join(thinking_matches)),
+        'tool_call_tokens': estimate_tokens(''.join(tool_matches)),
+        'other_tokens': estimate_tokens(' ' * other_chars),
+        'thinking_percentage': (thinking_chars / len(response) * 100) if response else 0,
+        'num_turns': len(turns),
+        'avg_turn_tokens': sum(estimate_tokens(str(turn)) for turn in turns) // len(turns) if turns else 0,
+    }
+    
+    # Identify the main contributor
+    if analysis['thinking_tokens'] > analysis['total_response_tokens'] * 0.7:
+        analysis['main_issue'] = 'excessive_thinking'
+    elif analysis['tool_call_tokens'] > analysis['total_response_tokens'] * 0.5:
+        analysis['main_issue'] = 'excessive_tool_calls'
+    else:
+        analysis['main_issue'] = 'general_verbosity'
+    
+    return analysis

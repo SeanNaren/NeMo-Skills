@@ -118,56 +118,91 @@ def calculate_line_overlap(gt_start: int, gt_end: int, pred_start: int, pred_end
     return intersection_size / union_size
 
 
-def evaluate_chunk_containment_metrics(ground_truth_locations: List[Dict], predicted_locations: List[Dict]) -> Dict[str, float]:
+def evaluate_chunk_containment_metrics(ground_truth_locations: List[Dict], predicted_locations: List[Dict], 
+                                      overlap_threshold: float = 0.8, near_miss_tolerance: int = 1) -> Dict[str, float]:
     """
     Calculate chunk-level containment metrics where predictions are rewarded for completely encompassing ground truth.
+    Also includes overlap-based metrics for partial matches.
     
     Args:
         ground_truth_locations: List of ground truth location dictionaries
         predicted_locations: List of predicted location dictionaries
+        overlap_threshold: Minimum overlap ratio to consider a partial match (default 0.8 = 80%)
+        near_miss_tolerance: Line tolerance for "near miss" predictions (default 1 line)
     
     Returns:
         Dictionary containing coverage_recall, avg_prediction_tightness, and precision metrics
     """
     if not ground_truth_locations and not predicted_locations:
         return {
-            "coverage_recall": 0.0,  # No GT to cover, so 0
-            "avg_prediction_tightness": 0.0,  # No predictions, so 0
-            "precision": 0.0,  # No predictions can be useful, so 0
+            # Strict containment metrics
+            "coverage_recall": 0.0,
+            "avg_prediction_tightness": 0.0,
+            "precision": 0.0,
             "covered_chunks": 0,
             "total_chunks": 0,
             "useful_predictions": 0,
-            "total_predictions": 0
+            "total_predictions": 0,
+            # Overlap-based metrics
+            "overlap_recall": 0.0,
+            "avg_overlap_score": 0.0,
+            "partial_precision": 0.0,
+            "partial_covered_chunks": 0,
+            "near_miss_chunks": 0,
+            "all_matched_chunks": 0,
+            "partial_useful_predictions": 0
         }
     
     if not ground_truth_locations:
         return {
-            "coverage_recall": 0.0,  # No GT to cover, so 0
+            # Strict containment metrics
+            "coverage_recall": 0.0,
             "avg_prediction_tightness": 0.0,
-            "precision": 0.0,  # All predictions are useless (no GT), so 0
+            "precision": 0.0,
             "covered_chunks": 0,
             "total_chunks": 0,
             "useful_predictions": 0,
-            "total_predictions": len(predicted_locations)
+            "total_predictions": len(predicted_locations),
+            # Overlap-based metrics
+            "overlap_recall": 0.0,
+            "avg_overlap_score": 0.0,
+            "partial_precision": 0.0,
+            "partial_covered_chunks": 0,
+            "near_miss_chunks": 0,
+            "all_matched_chunks": 0,
+            "partial_useful_predictions": 0
         }
     
     if not predicted_locations:
         return {
+            # Strict containment metrics
             "coverage_recall": 0.0,
             "avg_prediction_tightness": 0.0,
             "precision": 0.0,
             "covered_chunks": 0,
             "total_chunks": len(ground_truth_locations),
             "useful_predictions": 0,
-            "total_predictions": 0
+            "total_predictions": 0,
+            # Overlap-based metrics
+            "overlap_recall": 0.0,
+            "avg_overlap_score": 0.0,
+            "partial_precision": 0.0,
+            "partial_covered_chunks": 0,
+            "near_miss_chunks": 0,
+            "all_matched_chunks": 0,
+            "partial_useful_predictions": 0
         }
     
     # Track which ground truths are covered and by which predictions
-    covered_gt_indices = set()
+    covered_gt_indices = set()  # Strict containment
+    partial_covered_gt_indices = set()  # Overlap-based coverage
+    near_miss_gt_indices = set()  # Near misses
     useful_pred_indices = set()
+    partial_useful_pred_indices = set()
     tightness_scores = []
+    overlap_scores = []
     
-    # For each ground truth, check if any prediction fully covers it
+    # For each ground truth, check if any prediction covers it
     for gt_idx, gt_loc in enumerate(ground_truth_locations):
         if 'file_path' not in gt_loc or 'start_line' not in gt_loc or 'end_line' not in gt_loc:
             continue
@@ -177,7 +212,10 @@ def evaluate_chunk_containment_metrics(ground_truth_locations: List[Dict], predi
         gt_end = gt_loc['end_line']
         
         best_tightness = 0.0
+        best_overlap = 0.0
         found_coverage = False
+        found_partial = False
+        found_near_miss = False
         
         # Check all predictions for this ground truth
         for pred_idx, pred_loc in enumerate(predicted_locations):
@@ -191,7 +229,10 @@ def evaluate_chunk_containment_metrics(ground_truth_locations: List[Dict], predi
             pred_start = pred_loc['start_line']
             pred_end = pred_loc['end_line']
             
-            # Check if prediction fully contains ground truth
+            # Calculate overlap
+            overlap_ratio = calculate_line_overlap(gt_start, gt_end, pred_start, pred_end)
+            
+            # Check for strict containment
             if pred_start <= gt_start and pred_end >= gt_end:
                 found_coverage = True
                 useful_pred_indices.add(pred_idx)
@@ -204,27 +245,84 @@ def evaluate_chunk_containment_metrics(ground_truth_locations: List[Dict], predi
                 # Keep the best (tightest) prediction for this ground truth
                 if tightness > best_tightness:
                     best_tightness = tightness
+            
+            # Check for partial match based on overlap
+            elif overlap_ratio >= overlap_threshold:
+                found_partial = True
+                partial_useful_pred_indices.add(pred_idx)
+                if overlap_ratio > best_overlap:
+                    best_overlap = overlap_ratio
+            
+            # Check for near miss (predictions that are very close but don't overlap enough)
+            elif not found_partial and not found_coverage:
+                # Check if prediction is within tolerance
+                start_distance = abs(pred_start - gt_start)
+                end_distance = abs(pred_end - gt_end)
+                
+                if start_distance <= near_miss_tolerance or end_distance <= near_miss_tolerance:
+                    found_near_miss = True
+                    partial_useful_pred_indices.add(pred_idx)
+                    
+                    # Calculate near-miss score based on how close the prediction is
+                    # If there's some overlap, use the overlap ratio
+                    if overlap_ratio > 0:
+                        near_miss_score = overlap_ratio * 0.9  # Slightly penalize for not meeting threshold
+                    else:
+                        # No overlap - use average distance from both boundaries
+                        avg_distance = (start_distance + end_distance) / 2.0
+                        # Score decreases with distance, max score of 0.5 for perfect boundary alignment
+                        near_miss_score = max(0, 0.5 * (1.0 - avg_distance / (near_miss_tolerance + 1)))
+                    
+                    if near_miss_score > best_overlap:
+                        best_overlap = near_miss_score
         
         if found_coverage:
             covered_gt_indices.add(gt_idx)
             tightness_scores.append(best_tightness)
+            overlap_scores.append(1.0)  # Full containment = perfect overlap
+        elif found_partial:
+            partial_covered_gt_indices.add(gt_idx)
+            overlap_scores.append(best_overlap)
+        elif found_near_miss:
+            near_miss_gt_indices.add(gt_idx)
+            overlap_scores.append(best_overlap)
     
     # Calculate metrics
     total_gt = len([gt for gt in ground_truth_locations if all(k in gt for k in ['file_path', 'start_line', 'end_line'])])
     total_pred = len([pred for pred in predicted_locations if all(k in pred for k in ['file_path', 'start_line', 'end_line'])])
     
+    # Strict containment metrics
     coverage_recall = len(covered_gt_indices) / total_gt if total_gt > 0 else 0.0
     avg_tightness = sum(tightness_scores) / len(tightness_scores) if tightness_scores else 0.0
     precision = len(useful_pred_indices) / total_pred if total_pred > 0 else 0.0
     
+    # Overlap-based metrics (includes partial matches and near misses)
+    all_matched_gt = covered_gt_indices | partial_covered_gt_indices | near_miss_gt_indices
+    overlap_recall = len(all_matched_gt) / total_gt if total_gt > 0 else 0.0
+    avg_overlap_score = sum(overlap_scores) / len(overlap_scores) if overlap_scores else 0.0
+    
+    # Partial precision (includes all predictions that were at least partially useful)
+    all_useful_pred = useful_pred_indices | partial_useful_pred_indices
+    partial_precision = len(all_useful_pred) / total_pred if total_pred > 0 else 0.0
+    
     return {
+        # Strict containment metrics (original)
         "coverage_recall": coverage_recall,
         "avg_prediction_tightness": avg_tightness,
         "precision": precision,
         "covered_chunks": len(covered_gt_indices),
         "total_chunks": total_gt,
         "useful_predictions": len(useful_pred_indices),
-        "total_predictions": total_pred
+        "total_predictions": total_pred,
+        
+        # Overlap-based metrics (new, more lenient)
+        "overlap_recall": overlap_recall,
+        "avg_overlap_score": avg_overlap_score,
+        "partial_precision": partial_precision,
+        "partial_covered_chunks": len(partial_covered_gt_indices),
+        "near_miss_chunks": len(near_miss_gt_indices),
+        "all_matched_chunks": len(all_matched_gt),
+        "partial_useful_predictions": len(all_useful_pred)
     }
 
 
@@ -368,8 +466,10 @@ def _execute_single_test(args):
     LOG.info(f"  Predicted locations: {len(locations)}")
     LOG.info(f"  File-level F1: {file_level_metrics['f1']:.3f}")
     LOG.info(f"  File-level Accuracy: {file_level_metrics['accuracy']:.3f}")
-    LOG.info(f"  Chunk Coverage Recall: {chunk_containment_metrics['coverage_recall']:.3f}")
-    LOG.info(f"  Avg Prediction Tightness: {chunk_containment_metrics['avg_prediction_tightness']:.3f}")
+    LOG.info(f"  Strict Coverage Recall: {chunk_containment_metrics['coverage_recall']:.3f}")
+    LOG.info(f"  Overlap-based Recall: {chunk_containment_metrics['overlap_recall']:.3f}")
+    LOG.info(f"  Avg Overlap Score: {chunk_containment_metrics['avg_overlap_score']:.3f}")
+    LOG.info(f"  Near Misses: {chunk_containment_metrics['near_miss_chunks']}")
     
     return elem_idx, output_dict
 
@@ -434,7 +534,14 @@ def eval_metrics(eval_config, locagent_data):
                     "covered_chunks": 0,
                     "total_chunks": len(ground_truth_locations),
                     "useful_predictions": 0,
-                    "total_predictions": 0
+                    "total_predictions": 0,
+                    "overlap_recall": 0.0,
+                    "avg_overlap_score": 0.0,
+                    "partial_precision": 0.0,
+                    "partial_covered_chunks": 0,
+                    "near_miss_chunks": 0,
+                    "all_matched_chunks": 0,
+                    "partial_useful_predictions": 0
                 },
                 "ground_truth_locations": ground_truth_locations,
                 "ground_truth_count": len(ground_truth_locations),
@@ -458,7 +565,14 @@ def eval_metrics(eval_config, locagent_data):
                     "covered_chunks": 0,
                     "total_chunks": len(ground_truth_locations),
                     "useful_predictions": 0,
-                    "total_predictions": 0
+                    "total_predictions": 0,
+                    "overlap_recall": 0.0,
+                    "avg_overlap_score": 0.0,
+                    "partial_precision": 0.0,
+                    "partial_covered_chunks": 0,
+                    "near_miss_chunks": 0,
+                    "all_matched_chunks": 0,
+                    "partial_useful_predictions": 0
                 },
                 "ground_truth_locations": ground_truth_locations,
                 "ground_truth_count": len(ground_truth_locations),
