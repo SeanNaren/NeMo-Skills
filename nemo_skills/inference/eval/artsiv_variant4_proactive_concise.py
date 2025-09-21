@@ -13,9 +13,9 @@
 # limitations under the License.
 
 """
-VARIANT 2: High Temperature + Structured Prompt
-Tests if temperature 0.7 + proper token limits is the key success factor
-Uses current artsiv.py structure but with successful run's inference settings
+VARIANT 4: Proactive Conciseness Prompting
+Based on the key insight: successful run didn't hit token limits, but generated naturally concise responses.
+Strategy: Predict token usage and proactively prompt for concise thinking when approaching limits.
 """
 
 import copy
@@ -92,16 +92,17 @@ truncate_dialogue_history = dialog_processor.truncate_dialogue_history
 
 LOG = logging.getLogger(get_logger_name(__file__))
 
+
 @nested_dataclass(kw_only=True)
 class ArtsivGenerationConfig(GenerateSolutionsConfig):
-    # HYPOTHESIS: High temperature + proper token limits are critical
+    # Match successful run's core inference settings
     inference: InferenceConfig = field(default_factory=lambda: InferenceConfig(
-        temperature=0.7,
+        temperature=0.7,  # CRITICAL: Match successful run
         top_k=0,
         top_p=0.95,
         min_p=0.0,
         random_seed=0,
-        tokens_to_generate=81920,
+        tokens_to_generate=81920,  # CRITICAL: Match successful run  
         repetition_penalty=1.0,
         top_logprobs=None,
         extra_body={}
@@ -110,10 +111,10 @@ class ArtsivGenerationConfig(GenerateSolutionsConfig):
 
     # Agent behavior settings
     mount_directory: str = "/repos/"
-    remove_thinking: bool = True  # Keep thinking removal
+    remove_thinking: bool = True  # Keep the thinking removal that made responses concise
     total_steps: int = 20
 
-    # Repository filtering settings
+    # Repository filtering settings - match successful run
     file_extensions: list = field(default_factory=lambda: ["py", "cfg"])
     exclude_dirs: list = field(
         default_factory=lambda: [
@@ -141,7 +142,8 @@ class ArtsivGenerationConfig(GenerateSolutionsConfig):
         ]
     )
 
-    max_seq_length: int = 262144
+    # Context settings - match successful run
+    max_seq_length: int = 262144  # CRITICAL: Match successful run
     show_line_counts: bool = False
     max_view_lines: int = 1000
 
@@ -162,21 +164,51 @@ class ArtsivGenerationConfig(GenerateSolutionsConfig):
     final_turn_instruction_type: str = "aligned"
     final_turn_threshold: float = 1.0
     
-    # Response length management
-    enable_response_length_management: bool = True
-    max_retries: int = 2
-    enable_response_truncation: bool = True
-    inject_length_warnings: bool = True
-    response_warning_threshold: float = 0.75
-    response_critical_threshold: float = 0.9
+    # NEW: Proactive conciseness settings (replace complex response length management)
+    enable_proactive_conciseness: bool = True  # Enable proactive prompting for conciseness
+    conciseness_token_threshold: float = 0.7  # Start prompting when context reaches 70% of limit
+    conciseness_prompt: str = "\n\nIMPORTANT: Context is getting full. Please be extra concise in your thinking. Focus only on the essential reasoning steps and immediately make your tool call."
+    enable_token_prediction: bool = True  # Predict token usage before generation
+    generation_buffer_tokens: int = 5000  # Reserve tokens for model completion
 
 
 cs = hydra.core.config_store.ConfigStore.instance()
 cs.store(name="base_artsiv_generation_config", node=ArtsivGenerationConfig)
 
 
+def inject_conciseness_prompt(turns, conciseness_prompt):
+    """Inject a conciseness instruction into the latest user message."""
+    if not turns or len(turns) == 0:
+        return turns
+    
+    # Find the most recent turn with inputs (user message)
+    for turn in reversed(turns):
+        if isinstance(turn, dict) and turn.get('inputs', '').strip():
+            # Append the conciseness instruction to the inputs
+            current_inputs = turn['inputs']
+            if not current_inputs.endswith('\n'):
+                current_inputs += '\n'
+            turn['inputs'] = current_inputs + conciseness_prompt
+            LOG.info(f"Injected conciseness prompt: context approaching limit")
+            break
+    
+    return turns
+
+
 class ArtsivGenerationTask(GenerationTask):
     def __init__(self, cfg: ArtsivGenerationConfig):
+        # Simple token adjustment - match successful run behavior
+        original_tokens = cfg.inference.tokens_to_generate
+        if cfg.enable_token_prediction:
+            # Reserve buffer tokens for completion
+            safe_limit = original_tokens - cfg.generation_buffer_tokens
+            if original_tokens > safe_limit:
+                LOG.warning(
+                    f"Adjusting tokens_to_generate from {original_tokens} to {safe_limit} "
+                    f"to ensure {cfg.generation_buffer_tokens} token buffer for response completion."
+                )
+                cfg.inference.tokens_to_generate = safe_limit
+        
         super().__init__(cfg)
         self.tool_executor = ToolExecutor(cfg)
         
@@ -333,6 +365,24 @@ class ArtsivGenerationTask(GenerationTask):
 
                 prepared_data_point = copy.deepcopy(data_point)
                 
+                # NEW: Proactive conciseness injection based on token prediction
+                if (self.cfg.enable_proactive_conciseness and 
+                    ENHANCED_CONTEXT_AVAILABLE and 
+                    hasattr(self, '_token_counter')):
+                    try:
+                        from nemo_skills.inference.eval.artsiv_utils.enhanced_context_management import count_dialogue_tokens
+                        current_tokens = count_dialogue_tokens(prepared_data_point['turns'], self._token_counter)
+                        context_utilization = current_tokens / self.cfg.max_seq_length
+                        
+                        if context_utilization >= self.cfg.conciseness_token_threshold:
+                            LOG.info(f"Context utilization at {context_utilization:.2%}, injecting conciseness prompt")
+                            prepared_data_point['turns'] = inject_conciseness_prompt(
+                                prepared_data_point['turns'], 
+                                self.cfg.conciseness_prompt
+                            )
+                    except Exception as e:
+                        LOG.warning(f"Error in proactive conciseness check: {e}")
+                
                 if LOOP_DETECTION_AVAILABLE and self.cfg.enable_loop_detection and len(chat_history) >= self.cfg.loop_detection_threshold - 1:
                     is_loop, loop_info = detect_repetitive_tool_calls(chat_history, self.cfg.loop_detection_threshold - 1)
                     
@@ -367,97 +417,23 @@ class ArtsivGenerationTask(GenerationTask):
                         instruction_type=getattr(self.cfg, 'final_turn_instruction_type', 'standard')
                     )
 
-                response_type = 'normal'
-                if cur_step == total_steps - 1:
-                    response_type = 'final_turn'
-                
-                safe_generation_limit = None
-                if self.cfg.enable_response_length_management:
-                    if hasattr(self, '_token_counter') and self.cfg.max_seq_length:
-                        from nemo_skills.inference.eval.artsiv_utils.enhanced_context_management import count_dialogue_tokens
-                        current_tokens = count_dialogue_tokens(prepared_data_point['turns'], self._token_counter)
-                        safe_generation_limit = dialog_processor.calculate_safe_token_limit(
-                            current_tokens, 
-                            self.cfg.max_seq_length,
-                            self.cfg.context_safety_margin,
-                            max_generation_tokens=self.cfg.inference.tokens_to_generate
+                try:
+                    LOG.info(f"Sending {len(prepared_data_point['turns'])} turns to LLM")
+                    llm_output = await super().process_single_datapoint(prepared_data_point, all_data)
+                    
+                except openai.BadRequestError as e:
+                    if 'Please reduce the length of the messages or completion' in str(e) or 'is longer than the model\'s context length' in str(e):
+                        LOG.warning(
+                            "Artsiv generation failed due to running out of context. "
+                            "Failing for subsequent subtasks automatically.",
                         )
-                        LOG.debug(f"Safe generation limit: {safe_generation_limit} tokens")
-                
-                retry_count = 0
-                while retry_count <= self.cfg.max_retries:
-                    try:
-                        LOG.info(f"Sending {len(prepared_data_point['turns'])} turns to LLM (attempt {retry_count + 1})")
-                        
-                        llm_output = await super().process_single_datapoint(prepared_data_point, all_data)
-                        
-                        if self.cfg.enable_response_length_management:
-                            # Use the single tokens_to_generate config for all response types
-                            max_tokens = self.cfg.inference.tokens_to_generate
-                            
-                            full_gen = llm_output.get('_full_generation', llm_output.get('generation', ''))
-                            is_acceptable, warning_msg, stats = dialog_processor.check_response_length(
-                                full_gen, 
-                                response_type, 
-                                max_tokens,
-                                warning_threshold=self.cfg.response_warning_threshold,
-                                critical_threshold=self.cfg.response_critical_threshold
-                            )
-                            
-                            if warning_msg:
-                                LOG.warning(f"Response length check: {warning_msg}")
-                                LOG.debug(f"Response stats: {stats}")
-                            
-                            if not is_acceptable and retry_count < self.cfg.max_retries:
-                                LOG.error(f"Response too long: {stats['estimated_tokens']} tokens")
-                                
-                                failure_analysis = dialog_processor.analyze_response_failure(
-                                    full_gen, 
-                                    prepared_data_point['turns'],
-                                    self.cfg.max_seq_length or 128000
-                                )
-                                LOG.info(f"Failure analysis: {failure_analysis}")
-                                
-                                if self.cfg.inject_length_warnings:
-                                    if response_type == 'final_turn':
-                                        warning_msg = (f"Please provide a shorter, more focused answer that directly states the bug location without excessive explanation.")
-
-                                    else:
-                                        warning_msg = (f"Please be more concise: reduce your thinking/reasoning to only the most essential analysis steps. Skip redundant explanations and focus on the critical path to finding the bug.")
-                                    
-                                    prepared_data_point['turns'] = dialog_processor.inject_length_warning(
-                                        prepared_data_point['turns'],
-                                        warning_msg
-                                    )
-                                
-                                retry_count += 1
-                                continue
-                            
-                            elif not is_acceptable and self.cfg.enable_response_truncation:
-                                LOG.warning(f"Truncating response after {retry_count} retries")
-                                llm_output['generation'] = dialog_processor.truncate_excessive_response(
-                                    llm_output['generation'], max_tokens
-                                )
-                                if '_full_generation' in llm_output:
-                                    llm_output['_full_generation'] = dialog_processor.truncate_excessive_response(
-                                        llm_output['_full_generation'], max_tokens
-                                    )
-                        
-                        break
-                        
-                    except openai.BadRequestError as e:
-                        if 'Please reduce the length of the messages or completion' in str(e) or 'is longer than the model\'s context length' in str(e):
-                            LOG.warning(
-                                "Artsiv generation failed due to running out of context. "
-                                "Failing for subsequent subtasks automatically.",
-                            )
-                            status = "failed"
-                            reason = "context_length_exceeded"
-                            break
-                        LOG.warning(f"Artsiv generation failed with BadRequestError: {e}")
                         status = "failed"
-                        reason = f"bad_request_error: {str(e)}"
+                        reason = "context_length_exceeded"
                         break
+                    LOG.warning(f"Artsiv generation failed with BadRequestError: {e}")
+                    status = "failed"
+                    reason = f"bad_request_error: {str(e)}"
+                    break
 
                 generated_tokens = llm_output.get('num_generated_tokens', 0)
                 total_generated_tokens += generated_tokens

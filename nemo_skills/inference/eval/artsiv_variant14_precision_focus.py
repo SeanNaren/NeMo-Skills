@@ -13,9 +13,13 @@
 # limitations under the License.
 
 """
-VARIANT 2: High Temperature + Structured Prompt
-Tests if temperature 0.7 + proper token limits is the key success factor
-Uses current artsiv.py structure but with successful run's inference settings
+VARIANT 14: Precision-Focused Investigation
+HYPOTHESIS: Guide model to distinguish root cause from symptoms
+Strategy: 
+- Add prompts to identify root cause vs symptom locations
+- Encourage deeper investigation before deciding
+- Verify locations contain actual bug-causing code
+- Based on V2 but with precision-enhancing prompts
 """
 
 import copy
@@ -23,6 +27,7 @@ import importlib
 import logging
 import pickle
 import sys
+import re
 from dataclasses import field
 from pathlib import Path
 
@@ -92,9 +97,113 @@ truncate_dialogue_history = dialog_processor.truncate_dialogue_history
 
 LOG = logging.getLogger(get_logger_name(__file__))
 
+
+def inject_precision_guidance(inputs: str, step: int, total_steps: int) -> str:
+    """Inject precision-focused guidance at key points."""
+    
+    if step == 0:
+        # Initial guidance for root cause focus
+        guidance = """
+
+🎯 **Investigation Strategy**:
+1. Identify WHERE the bug manifests (symptoms)
+2. Trace back to WHERE the bug originates (root cause)
+3. The fix location is usually the ROOT CAUSE, not the symptom
+4. Look for the actual implementation, not just where it's called
+
+Example: If autoreload fails in runserver, the bug is likely in autoreload.py, not runserver.py
+"""
+        return inputs + guidance
+    
+    elif step == 3:
+        # Mid-investigation reminder
+        guidance = """
+
+🔍 **Precision Check**: 
+- Have you found where the bug ORIGINATES, not just where it APPEARS?
+- Is this the IMPLEMENTATION or just a USAGE point?
+- Should you look deeper into core modules?
+"""
+        return inputs + guidance
+    
+    elif step >= total_steps - 4:
+        # Pre-decision verification
+        guidance = """
+
+✅ **Location Verification**:
+Before providing locations, verify:
+1. Does this file contain the actual buggy code?
+2. Is this the root cause or just a symptom location?
+3. Would fixing this file actually resolve the issue?
+
+Choose the file that needs modification, not just where the error appears.
+"""
+        return inputs + guidance
+    
+    return inputs
+
+
+def detect_investigation_depth(chat_history: list) -> dict:
+    """Analyze if the investigation is going deep enough."""
+    depth_indicators = {
+        'viewed_multiple_layers': False,
+        'checked_implementation': False,
+        'traced_back': False,
+        'files_viewed': 0
+    }
+    
+    files_viewed = set()
+    for turn in chat_history:
+        if 'generation' in turn:
+            gen = turn['generation']
+            # Count unique files viewed
+            file_matches = re.findall(r'"path":\s*"([^"]+)"', gen)
+            files_viewed.update(file_matches)
+            
+            # Check for implementation investigation
+            if any(keyword in gen.lower() for keyword in ['implementation', 'core', 'base', 'actual']):
+                depth_indicators['checked_implementation'] = True
+            
+            # Check for tracing back
+            if any(keyword in gen.lower() for keyword in ['trace', 'origin', 'root', 'cause']):
+                depth_indicators['traced_back'] = True
+    
+    depth_indicators['files_viewed'] = len(files_viewed)
+    depth_indicators['viewed_multiple_layers'] = len(files_viewed) >= 3
+    
+    return depth_indicators
+
+
+def inject_depth_prompt(inputs: str, depth_indicators: dict) -> str:
+    """Inject prompts based on investigation depth."""
+    
+    if not depth_indicators['checked_implementation'] and depth_indicators['files_viewed'] >= 2:
+        prompt = """
+
+⚠️ **Depth Check**: You've viewed surface-level files. 
+Consider checking the IMPLEMENTATION files:
+- Core logic modules (not just commands/views)
+- Base classes and utilities
+- Configuration and settings modules
+"""
+        return inputs + prompt
+    
+    if not depth_indicators['traced_back'] and depth_indicators['files_viewed'] >= 3:
+        prompt = """
+
+⚠️ **Root Cause Check**: You've explored several files.
+Have you traced back to the ROOT CAUSE?
+- Where is the bug actually introduced?
+- What's the core implementation that needs fixing?
+"""
+        return inputs + prompt
+    
+    return inputs
+
+
 @nested_dataclass(kw_only=True)
 class ArtsivGenerationConfig(GenerateSolutionsConfig):
-    # HYPOTHESIS: High temperature + proper token limits are critical
+    # Based on V2 configuration (82% precision)
     inference: InferenceConfig = field(default_factory=lambda: InferenceConfig(
         temperature=0.7,
         top_k=0,
@@ -108,12 +217,12 @@ class ArtsivGenerationConfig(GenerateSolutionsConfig):
     ))
     server: dict = field(default_factory=dict)
 
-    # Agent behavior settings
+    # Core settings from V2
     mount_directory: str = "/repos/"
-    remove_thinking: bool = True  # Keep thinking removal
+    remove_thinking: bool = True
     total_steps: int = 20
 
-    # Repository filtering settings
+    # Repository filtering settings from V2
     file_extensions: list = field(default_factory=lambda: ["py", "cfg"])
     exclude_dirs: list = field(
         default_factory=lambda: [
@@ -128,7 +237,7 @@ class ArtsivGenerationConfig(GenerateSolutionsConfig):
         ]
     )
 
-    # Tool detection settings
+    # Tool detection settings from V2
     enable_implicit_tool_detection: bool = True
     common_words_filter: list = field(
         default_factory=lambda: [
@@ -141,34 +250,31 @@ class ArtsivGenerationConfig(GenerateSolutionsConfig):
         ]
     )
 
+    # Context settings from V2
     max_seq_length: int = 262144
     show_line_counts: bool = False
     max_view_lines: int = 1000
 
-    # Truncation strategy settings
+    # V2 settings
     truncation_strategy: str = "bookend"
-    
-    # Loop detection settings
     enable_loop_detection: bool = True
     loop_detection_threshold: int = 3
-    
-    # Enhanced context management settings
     enable_enhanced_context: bool = True
     context_safety_margin: float = 0.9
     use_tiktoken: bool = True
-    
-    # Final turn prompt settings
     enable_final_turn_prompt: bool = True
     final_turn_instruction_type: str = "aligned"
     final_turn_threshold: float = 1.0
     
-    # Response length management
-    enable_response_length_management: bool = True
-    max_retries: int = 2
-    enable_response_truncation: bool = True
-    inject_length_warnings: bool = True
-    response_warning_threshold: float = 0.75
-    response_critical_threshold: float = 0.9
+    # Disable response length management (as in V2)
+    enable_response_length_management: bool = False
+    
+    # V14 NEW: Precision-focused features
+    enable_precision_guidance: bool = True
+    enable_depth_checking: bool = True
+    enable_root_cause_prompting: bool = True
+    min_investigation_depth: int = 3  # Minimum files to view before deciding
+    enable_verification_prompt: bool = True
 
 
 cs = hydra.core.config_store.ConfigStore.instance()
@@ -189,7 +295,7 @@ class ArtsivGenerationTask(GenerationTask):
         return
 
     async def process_single_datapoint(self, data_point, all_data):
-        """Will do all necessary generations to get a single answer for the data point."""
+        """Process with precision-focused guidance."""
 
         LOG.debug(
             f"Initial data_point keys: {list(data_point.keys()) if isinstance(data_point, dict) else 'not a dict'}"
@@ -260,6 +366,10 @@ class ArtsivGenerationTask(GenerationTask):
 {tree_structure}
 """
 
+            # V14: Add precision guidance from the start
+            if self.cfg.enable_precision_guidance:
+                inputs = inject_precision_guidance(inputs, 0, total_steps)
+
             data_point['turns'][0]['inputs'] = inputs
             LOG.debug(f"Initialized turns with problem statement, turn count: {len(data_point['turns'])}")
 
@@ -288,6 +398,46 @@ class ArtsivGenerationTask(GenerationTask):
                     reason = "invalid_turns_structure"
                     break
 
+                # V14: Add precision guidance at key points
+                if self.cfg.enable_precision_guidance and len(data_point['turns']) > 0:
+                    last_turn = data_point['turns'][-1]
+                    if isinstance(last_turn, dict) and last_turn.get('inputs', '').strip():
+                        original_inputs = last_turn['inputs']
+                        modified_inputs = inject_precision_guidance(original_inputs, cur_step, total_steps)
+                        if modified_inputs != original_inputs:
+                            last_turn['inputs'] = modified_inputs
+                            LOG.info(f"Injected precision guidance at step {cur_step}")
+
+                # V14: Check investigation depth and add prompts
+                if self.cfg.enable_depth_checking and len(chat_history) >= self.cfg.min_investigation_depth:
+                    depth_indicators = detect_investigation_depth(chat_history)
+                    
+                    if len(data_point['turns']) > 0:
+                        last_turn = data_point['turns'][-1]
+                        if isinstance(last_turn, dict):
+                            original_inputs = last_turn.get('inputs', '')
+                            modified_inputs = inject_depth_prompt(original_inputs, depth_indicators)
+                            if modified_inputs != original_inputs:
+                                last_turn['inputs'] = modified_inputs
+                                LOG.info(f"Injected depth prompt based on indicators: {depth_indicators}")
+
+                # V14: Enforce minimum investigation before allowing location submission
+                if (self.cfg.enable_verification_prompt and 
+                    cur_step >= total_steps - 3 and 
+                    len(chat_history) < self.cfg.min_investigation_depth):
+                    
+                    if len(data_point['turns']) > 0:
+                        last_turn = data_point['turns'][-1]
+                        if isinstance(last_turn, dict):
+                            last_turn['inputs'] += """
+
+⚠️ **Insufficient Investigation**: You've only viewed a few files.
+Please investigate more thoroughly before providing locations.
+Check related modules, implementations, and trace the bug to its root cause.
+"""
+                            LOG.info(f"Required more investigation at step {cur_step}")
+
+                # Context management (same as V2)
                 if hasattr(self.cfg, 'max_seq_length') and self.cfg.max_seq_length is not None and self.cfg.max_seq_length > 0:
                     original_turns_count = len(data_point['turns'])
                     
@@ -333,13 +483,27 @@ class ArtsivGenerationTask(GenerationTask):
 
                 prepared_data_point = copy.deepcopy(data_point)
                 
+                # Loop detection (same as V2)
                 if LOOP_DETECTION_AVAILABLE and self.cfg.enable_loop_detection and len(chat_history) >= self.cfg.loop_detection_threshold - 1:
                     is_loop, loop_info = detect_repetitive_tool_calls(chat_history, self.cfg.loop_detection_threshold - 1)
                     
                     if is_loop:
                         LOG.warning(f"Potential loop detected before generation! Previous {loop_info['total_repetitions']} calls were identical")
                         prepared_data_point['turns'] = inject_loop_intervention(prepared_data_point['turns'], loop_info)
+                        
+                        # V14: Add root cause reminder in loop intervention
+                        if self.cfg.enable_root_cause_prompting and len(prepared_data_point['turns']) > 0:
+                            last_turn = prepared_data_point['turns'][-1]
+                            if isinstance(last_turn, dict):
+                                last_turn['inputs'] += """
+
+You're repeating the same investigation. Consider:
+- Have you found the ROOT CAUSE, not just symptoms?
+- Should you look in different modules (core/base/utils)?
+- Are you stuck at the surface level?
+"""
                 
+                # Context check (same as V2)
                 if ENHANCED_CONTEXT_AVAILABLE and getattr(self.cfg, 'enable_enhanced_context', True):
                     will_fit, error_msg, context_stats = check_context_before_generation(
                         prepared_data_point, 
@@ -353,6 +517,7 @@ class ArtsivGenerationTask(GenerationTask):
                         reason = "context_length_exceeded_proactive"
                         break
                 
+                # Final turn prompt with precision focus
                 if FINAL_TURN_PROMPT_AVAILABLE and should_inject_final_turn(
                     cur_step, 
                     total_steps, 
@@ -364,100 +529,38 @@ class ArtsivGenerationTask(GenerationTask):
                     prepared_data_point['turns'] = inject_final_turn_instruction(
                         prepared_data_point['turns'],
                         is_final_turn=True,
-                        instruction_type=getattr(self.cfg, 'final_turn_instruction_type', 'standard')
+                        instruction_type=getattr(self.cfg, 'final_turn_instruction_type', 'aligned')
                     )
+                    
+                    # V14: Add precision reminder in final turn
+                    if self.cfg.enable_verification_prompt and len(prepared_data_point['turns']) > 0:
+                        last_turn = prepared_data_point['turns'][-1]
+                        if isinstance(last_turn, dict):
+                            last_turn['inputs'] += """
 
-                response_type = 'normal'
-                if cur_step == total_steps - 1:
-                    response_type = 'final_turn'
-                
-                safe_generation_limit = None
-                if self.cfg.enable_response_length_management:
-                    if hasattr(self, '_token_counter') and self.cfg.max_seq_length:
-                        from nemo_skills.inference.eval.artsiv_utils.enhanced_context_management import count_dialogue_tokens
-                        current_tokens = count_dialogue_tokens(prepared_data_point['turns'], self._token_counter)
-                        safe_generation_limit = dialog_processor.calculate_safe_token_limit(
-                            current_tokens, 
-                            self.cfg.max_seq_length,
-                            self.cfg.context_safety_margin,
-                            max_generation_tokens=self.cfg.inference.tokens_to_generate
+📍 **Final Location Selection**:
+Choose the file(s) that contain the actual bug-causing code.
+NOT where the error appears, but where it needs to be FIXED.
+"""
+
+                # LLM call (same as V2)
+                try:
+                    LOG.info(f"Sending {len(prepared_data_point['turns'])} turns to LLM")
+                    llm_output = await super().process_single_datapoint(prepared_data_point, all_data)
+                    
+                except openai.BadRequestError as e:
+                    if 'Please reduce the length of the messages or completion' in str(e) or 'is longer than the model\'s context length' in str(e):
+                        LOG.warning(
+                            "Artsiv generation failed due to running out of context. "
+                            "Failing for subsequent subtasks automatically.",
                         )
-                        LOG.debug(f"Safe generation limit: {safe_generation_limit} tokens")
-                
-                retry_count = 0
-                while retry_count <= self.cfg.max_retries:
-                    try:
-                        LOG.info(f"Sending {len(prepared_data_point['turns'])} turns to LLM (attempt {retry_count + 1})")
-                        
-                        llm_output = await super().process_single_datapoint(prepared_data_point, all_data)
-                        
-                        if self.cfg.enable_response_length_management:
-                            # Use the single tokens_to_generate config for all response types
-                            max_tokens = self.cfg.inference.tokens_to_generate
-                            
-                            full_gen = llm_output.get('_full_generation', llm_output.get('generation', ''))
-                            is_acceptable, warning_msg, stats = dialog_processor.check_response_length(
-                                full_gen, 
-                                response_type, 
-                                max_tokens,
-                                warning_threshold=self.cfg.response_warning_threshold,
-                                critical_threshold=self.cfg.response_critical_threshold
-                            )
-                            
-                            if warning_msg:
-                                LOG.warning(f"Response length check: {warning_msg}")
-                                LOG.debug(f"Response stats: {stats}")
-                            
-                            if not is_acceptable and retry_count < self.cfg.max_retries:
-                                LOG.error(f"Response too long: {stats['estimated_tokens']} tokens")
-                                
-                                failure_analysis = dialog_processor.analyze_response_failure(
-                                    full_gen, 
-                                    prepared_data_point['turns'],
-                                    self.cfg.max_seq_length or 128000
-                                )
-                                LOG.info(f"Failure analysis: {failure_analysis}")
-                                
-                                if self.cfg.inject_length_warnings:
-                                    if response_type == 'final_turn':
-                                        warning_msg = (f"Please provide a shorter, more focused answer that directly states the bug location without excessive explanation.")
-
-                                    else:
-                                        warning_msg = (f"Please be more concise: reduce your thinking/reasoning to only the most essential analysis steps. Skip redundant explanations and focus on the critical path to finding the bug.")
-                                    
-                                    prepared_data_point['turns'] = dialog_processor.inject_length_warning(
-                                        prepared_data_point['turns'],
-                                        warning_msg
-                                    )
-                                
-                                retry_count += 1
-                                continue
-                            
-                            elif not is_acceptable and self.cfg.enable_response_truncation:
-                                LOG.warning(f"Truncating response after {retry_count} retries")
-                                llm_output['generation'] = dialog_processor.truncate_excessive_response(
-                                    llm_output['generation'], max_tokens
-                                )
-                                if '_full_generation' in llm_output:
-                                    llm_output['_full_generation'] = dialog_processor.truncate_excessive_response(
-                                        llm_output['_full_generation'], max_tokens
-                                    )
-                        
-                        break
-                        
-                    except openai.BadRequestError as e:
-                        if 'Please reduce the length of the messages or completion' in str(e) or 'is longer than the model\'s context length' in str(e):
-                            LOG.warning(
-                                "Artsiv generation failed due to running out of context. "
-                                "Failing for subsequent subtasks automatically.",
-                            )
-                            status = "failed"
-                            reason = "context_length_exceeded"
-                            break
-                        LOG.warning(f"Artsiv generation failed with BadRequestError: {e}")
                         status = "failed"
-                        reason = f"bad_request_error: {str(e)}"
+                        reason = "context_length_exceeded"
                         break
+                    LOG.warning(f"Artsiv generation failed with BadRequestError: {e}")
+                    status = "failed"
+                    reason = f"bad_request_error: {str(e)}"
+                    break
 
                 generated_tokens = llm_output.get('num_generated_tokens', 0)
                 total_generated_tokens += generated_tokens
@@ -471,6 +574,7 @@ class ArtsivGenerationTask(GenerationTask):
 
                 chat_history.append(llm_output)
                 
+                # Loop detection after generation (same as V2)
                 if LOOP_DETECTION_AVAILABLE and self.cfg.enable_loop_detection and len(chat_history) >= self.cfg.loop_detection_threshold:
                     is_loop, loop_info = detect_repetitive_tool_calls(chat_history, self.cfg.loop_detection_threshold)
                     
@@ -490,9 +594,11 @@ class ArtsivGenerationTask(GenerationTask):
                         pattern_analysis = analyze_loop_patterns(chat_history)
                         LOG.debug(f"Pattern analysis: {pattern_analysis}")
 
+                # Remove thinking (same as V2)
                 if self.cfg.remove_thinking:
                     remove_thinking(llm_output, 'generation', self.cfg.thinking_begin, self.cfg.thinking_end)
 
+                # Response extraction (same as V2)
                 try:
                     extracted_block = DialogProcessor.extract_response(llm_output['generation'], self.cfg)
                 except Exception as e:
@@ -511,14 +617,14 @@ class ArtsivGenerationTask(GenerationTask):
                         reason = "response_truncated_at_token_limit"
                         LOG.error(
                             f"Response was truncated at token limit ({generated_tokens} tokens) "
-                            f"and no valid tool/location was extracted. The model needs more tokens "
-                            f"to complete its response, but a buffer should have been reserved."
+                            f"and no valid tool/location was extracted."
                         )
                     else:
                         status = "failed"
                         reason = "no_tool_or_location_generated"
                     break
 
+                # Turn management (same as V2)
                 try:
                     if data_point['turns'] and len(data_point['turns']) > 0:
                         current_turn = data_point['turns'][-1]
@@ -625,39 +731,10 @@ class ArtsivGenerationTask(GenerationTask):
             print(f"Error type: {type(e).__name__}")
             print(f"Full traceback:\n{full_traceback}")
 
-            if isinstance(data_point, dict):
-                LOG.error(f"data_point keys: {list(data_point.keys())}")
-                print(f"data_point keys: {list(data_point.keys())}")
-
-                if 'turns' in data_point:
-                    LOG.error(f"Number of turns: {len(data_point['turns'])}")
-                    print(f"Number of turns: {len(data_point['turns'])}")
-
-                    for i, turn in enumerate(data_point['turns'][:5]):
-                        if isinstance(turn, dict):
-                            LOG.error(f"Turn {i} keys: {list(turn.keys())}")
-                            LOG.error(f"Turn {i} has 'assistant': {'assistant' in turn}")
-                            print(f"Turn {i} keys: {list(turn.keys())}")
-                            print(f"  - has 'assistant': {'assistant' in turn}")
-                            print(f"  - has 'inputs': {'inputs' in turn}")
-                            print(f"  - has 'tool_call': {'tool_call' in turn}")
-                            print(f"  - has 'tool_output': {'tool_output' in turn}")
-                        else:
-                            LOG.error(f"Turn {i} is not a dict: {type(turn)}")
-                            print(f"Turn {i} is not a dict: {type(turn)}, value: {turn}")
-                else:
-                    LOG.error("No 'turns' key in data_point")
-                    print("No 'turns' key in data_point")
-            else:
-                LOG.error(f"data_point is not a dict: {type(data_point)}")
-                print(f"data_point is not a dict: {type(data_point)}")
-
-            print(f"{'='*60}\n")
-            LOG.error("=== END DEBUG STATE ===")
-
             status = "failed"
             reason = f"exception: {str(e)}"
 
+        # Cleanup (same as V2)
         if 'turns' not in data_point:
             LOG.warning("Missing 'turns' in data_point at return time, initializing empty structure")
             data_point['turns'] = []

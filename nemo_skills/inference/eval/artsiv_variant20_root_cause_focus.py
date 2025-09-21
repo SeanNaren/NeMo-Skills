@@ -13,9 +13,24 @@
 # limitations under the License.
 
 """
-VARIANT 2: High Temperature + Structured Prompt
-Tests if temperature 0.7 + proper token limits is the key success factor
-Uses current artsiv.py structure but with successful run's inference settings
+VARIANT 20: Root Cause Focus (Built on V2)
+Addresses the "viewed correct file but chose wrong" issue (31% of V2 failures) by:
+
+1. Modified system prompt emphasizing:
+   - Root cause vs symptom distinction
+   - Tracing back from error manifestation to source
+   - Avoiding anchoring bias
+
+2. Runtime interventions:
+   - Warns when viewing same file 3+ times
+   - Periodic reminders about finding fix locations
+   - Detects symptom locations (error handling/logging)
+   - Encourages broad exploration in first turn
+
+3. Key improvements over V2:
+   - Should reduce cases where model views correct file but dismisses it
+   - Should help model distinguish between error symptoms and root causes
+   - Should prevent repetitive viewing of wrong files
 """
 
 import copy
@@ -92,16 +107,65 @@ truncate_dialogue_history = dialog_processor.truncate_dialogue_history
 
 LOG = logging.getLogger(get_logger_name(__file__))
 
+
+def track_file_views(turns: list) -> dict:
+    """Track how many times each file has been viewed."""
+    file_view_counts = {}
+    for turn in turns:
+        if isinstance(turn, dict) and 'tool_call' in turn and turn['tool_call']:
+            tool_call = turn['tool_call']
+            if 'path' in tool_call:
+                path = tool_call['path']
+                file_view_counts[path] = file_view_counts.get(path, 0) + 1
+    return file_view_counts
+
+
+def inject_reconsideration_prompt(inputs: str, file_path: str, view_count: int) -> str:
+    """Inject a prompt to reconsider when viewing the same file repeatedly."""
+    if view_count >= 3:
+        prompt = f"\n⚠️ You've viewed {file_path} {view_count} times. Before continuing, consider:\n" \
+                 f"- Is this where the bug manifests or where it needs to be fixed?\n" \
+                 f"- Have you traced back to the root cause?\n" \
+                 f"- Should you explore alternative locations?\n\n"
+        return prompt + inputs
+    return inputs
+
+
+def inject_root_cause_reminder(inputs: str, turn_number: int) -> str:
+    """Periodically remind about root cause vs symptom."""
+    if turn_number > 0 and turn_number % 5 == 0:
+        reminder = "\n💡 Reminder: Focus on where the code needs to be FIXED, not where the error APPEARS.\n\n"
+        return reminder + inputs
+    return inputs
+
+def detect_symptom_location(tool_output: str, problem_statement: str) -> bool:
+    """Detect if current location might be a symptom rather than root cause."""
+    # Look for patterns that suggest this is where errors manifest
+    symptom_patterns = [
+        'raise', 'except', 'error', 'exception', 'traceback',
+        'print', 'log', 'warning', 'assert', 'check', 'validate'
+    ]
+    
+    # Count symptom indicators
+    symptom_score = sum(1 for pattern in symptom_patterns if pattern in tool_output.lower())
+    
+    # If problem mentions specific error/exception, current file showing that error might be symptom
+    if 'error' in problem_statement.lower() or 'exception' in problem_statement.lower():
+        if any(err_type in tool_output for err_type in ['Error', 'Exception', 'error(', 'exception(']):
+            symptom_score += 2
+    
+    return symptom_score >= 3
+
 @nested_dataclass(kw_only=True)
 class ArtsivGenerationConfig(GenerateSolutionsConfig):
     # HYPOTHESIS: High temperature + proper token limits are critical
     inference: InferenceConfig = field(default_factory=lambda: InferenceConfig(
-        temperature=0.7,
+        temperature=0.7,  # CRITICAL: Changed from 0.0 to 0.7
         top_k=0,
         top_p=0.95,
         min_p=0.0,
         random_seed=0,
-        tokens_to_generate=81920,
+        tokens_to_generate=81920,  # CRITICAL: Changed from 2048 to 81920
         repetition_penalty=1.0,
         top_logprobs=None,
         extra_body={}
@@ -112,6 +176,12 @@ class ArtsivGenerationConfig(GenerateSolutionsConfig):
     mount_directory: str = "/repos/"
     remove_thinking: bool = True  # Keep thinking removal
     total_steps: int = 20
+    
+    # V20: Root cause analysis settings
+    enable_repetition_detection: bool = True
+    repetition_threshold: int = 3  # Warn after viewing same file 3 times
+    enable_root_cause_reminders: bool = True
+    reminder_interval: int = 5  # Remind every 5 turns
 
     # Repository filtering settings
     file_extensions: list = field(default_factory=lambda: ["py", "cfg"])
@@ -141,7 +211,8 @@ class ArtsivGenerationConfig(GenerateSolutionsConfig):
         ]
     )
 
-    max_seq_length: int = 262144
+    # CRITICAL: Match successful run's context settings
+    max_seq_length: int = 262144  # Changed from None to 262144
     show_line_counts: bool = False
     max_view_lines: int = 1000
 
@@ -162,13 +233,16 @@ class ArtsivGenerationConfig(GenerateSolutionsConfig):
     final_turn_instruction_type: str = "aligned"
     final_turn_threshold: float = 1.0
     
-    # Response length management
+    # Response length management - match successful run
     enable_response_length_management: bool = True
-    max_retries: int = 2
+    max_response_tokens: int = 60000
+    max_thinking_tokens: int = 70000
+    max_final_turn_tokens: int = 40000
+    response_length_retry_limit: int = 20000
     enable_response_truncation: bool = True
     inject_length_warnings: bool = True
-    response_warning_threshold: float = 0.75
-    response_critical_threshold: float = 0.9
+    max_allowed_generation_tokens: int = 75000
+    generation_buffer_tokens: int = 5000
 
 
 cs = hydra.core.config_store.ConfigStore.instance()
@@ -177,6 +251,22 @@ cs.store(name="base_artsiv_generation_config", node=ArtsivGenerationConfig)
 
 class ArtsivGenerationTask(GenerationTask):
     def __init__(self, cfg: ArtsivGenerationConfig):
+        # Apply the same token adjustment as successful run
+        original_tokens = cfg.inference.tokens_to_generate
+        if cfg.enable_response_length_management:
+            safe_limit = original_tokens - cfg.generation_buffer_tokens
+            if safe_limit < cfg.max_allowed_generation_tokens:
+                effective_limit = safe_limit
+            else:
+                effective_limit = cfg.max_allowed_generation_tokens
+            
+            if original_tokens > effective_limit:
+                LOG.warning(
+                    f"Adjusting tokens_to_generate from {original_tokens} to {effective_limit} "
+                    f"to ensure {cfg.generation_buffer_tokens} token buffer for response completion."
+                )
+                cfg.inference.tokens_to_generate = effective_limit
+        
         super().__init__(cfg)
         self.tool_executor = ToolExecutor(cfg)
         
@@ -258,6 +348,14 @@ class ArtsivGenerationTask(GenerationTask):
 
 ### Repository Structure
 {tree_structure}
+
+🎯 Investigation Guidelines:
+- Start broad: understand the overall code structure before diving deep
+- Consider using connected_tree first to map relationships
+- Distinguish between where errors APPEAR vs where fixes BELONG
+- The bug location is where code needs to be CHANGED, not where symptoms show
+- If you find yourself returning to the same file repeatedly, reconsider your assumptions
+- Trace execution flow BACKWARDS from error messages to their source
 """
 
             data_point['turns'][0]['inputs'] = inputs
@@ -287,6 +385,27 @@ class ArtsivGenerationTask(GenerationTask):
                     status = "failed"
                     reason = "invalid_turns_structure"
                     break
+                
+                # V20: Add root cause reminders and repetition detection
+                if len(data_point['turns']) > 0:
+                    last_turn = data_point['turns'][-1]
+                    if isinstance(last_turn, dict) and 'inputs' in last_turn:
+                        # Root cause reminder
+                        if self.cfg.enable_root_cause_reminders:
+                            last_turn['inputs'] = inject_root_cause_reminder(last_turn['inputs'], cur_step)
+                        
+                        # Repetition detection
+                        if self.cfg.enable_repetition_detection and cur_step > 0:
+                            file_views = track_file_views(data_point['turns'])
+                            # Check if we're about to view a file again
+                            for path, count in file_views.items():
+                                if count >= self.cfg.repetition_threshold:
+                                    # Check if this file is mentioned in current inputs
+                                    if path in str(last_turn.get('tool_output', '')):
+                                        last_turn['inputs'] = inject_reconsideration_prompt(
+                                            last_turn['inputs'], path, count
+                                        )
+                                        LOG.debug(f"Injected reconsideration prompt for {path} (viewed {count} times)")
 
                 if hasattr(self.cfg, 'max_seq_length') and self.cfg.max_seq_length is not None and self.cfg.max_seq_length > 0:
                     original_turns_count = len(data_point['turns'])
@@ -379,36 +498,49 @@ class ArtsivGenerationTask(GenerationTask):
                         safe_generation_limit = dialog_processor.calculate_safe_token_limit(
                             current_tokens, 
                             self.cfg.max_seq_length,
-                            self.cfg.context_safety_margin,
-                            max_generation_tokens=self.cfg.inference.tokens_to_generate
+                            self.cfg.context_safety_margin
                         )
                         LOG.debug(f"Safe generation limit: {safe_generation_limit} tokens")
                 
                 retry_count = 0
-                while retry_count <= self.cfg.max_retries:
+                max_retries = 2
+                
+                while retry_count <= max_retries:
                     try:
                         LOG.info(f"Sending {len(prepared_data_point['turns'])} turns to LLM (attempt {retry_count + 1})")
                         
+                        if retry_count > 0:
+                            original_tokens_to_generate = self.cfg.inference.tokens_to_generate
+                            self.cfg.inference.tokens_to_generate = self.cfg.response_length_retry_limit
+                            LOG.warning(f"Retry {retry_count}: Using stricter token limit of {self.cfg.response_length_retry_limit}")
+                        
                         llm_output = await super().process_single_datapoint(prepared_data_point, all_data)
                         
+                        if retry_count > 0:
+                            self.cfg.inference.tokens_to_generate = original_tokens_to_generate
+                        
                         if self.cfg.enable_response_length_management:
-                            # Use the single tokens_to_generate config for all response types
-                            max_tokens = self.cfg.inference.tokens_to_generate
+                            has_thinking = '_has_think_tags' in llm_output and llm_output['_has_think_tags']
+                            if has_thinking:
+                                max_tokens = self.cfg.max_thinking_tokens
+                                check_type = 'thinking'
+                            elif response_type == 'final_turn':
+                                max_tokens = self.cfg.max_final_turn_tokens
+                                check_type = 'final_turn'
+                            else:
+                                max_tokens = self.cfg.max_response_tokens
+                                check_type = 'normal'
                             
                             full_gen = llm_output.get('_full_generation', llm_output.get('generation', ''))
                             is_acceptable, warning_msg, stats = dialog_processor.check_response_length(
-                                full_gen, 
-                                response_type, 
-                                max_tokens,
-                                warning_threshold=self.cfg.response_warning_threshold,
-                                critical_threshold=self.cfg.response_critical_threshold
+                                full_gen, check_type, max_tokens
                             )
                             
                             if warning_msg:
                                 LOG.warning(f"Response length check: {warning_msg}")
                                 LOG.debug(f"Response stats: {stats}")
                             
-                            if not is_acceptable and retry_count < self.cfg.max_retries:
+                            if not is_acceptable and retry_count < max_retries:
                                 LOG.error(f"Response too long: {stats['estimated_tokens']} tokens")
                                 
                                 failure_analysis = dialog_processor.analyze_response_failure(
@@ -419,15 +551,9 @@ class ArtsivGenerationTask(GenerationTask):
                                 LOG.info(f"Failure analysis: {failure_analysis}")
                                 
                                 if self.cfg.inject_length_warnings:
-                                    if response_type == 'final_turn':
-                                        warning_msg = (f"Please provide a shorter, more focused answer that directly states the bug location without excessive explanation.")
-
-                                    else:
-                                        warning_msg = (f"Please be more concise: reduce your thinking/reasoning to only the most essential analysis steps. Skip redundant explanations and focus on the critical path to finding the bug.")
-                                    
                                     prepared_data_point['turns'] = dialog_processor.inject_length_warning(
                                         prepared_data_point['turns'],
-                                        warning_msg
+                                        f"Previous response was too long ({stats['estimated_tokens']} tokens). Maximum allowed: {max_tokens} tokens"
                                     )
                                 
                                 retry_count += 1
@@ -559,6 +685,15 @@ class ArtsivGenerationTask(GenerationTask):
                     tool_call_result = self.tool_executor.execute_tool(extracted_block["tool_call"], repo_dict)
 
                     tool_output_to_store = tool_call_result
+                    
+                    # V20: Detect potential symptom locations
+                    if (self.cfg.enable_root_cause_reminders and 
+                        'view_file' in str(extracted_block["tool_call"]) and
+                        detect_symptom_location(tool_output_to_store, data_point.get('problem_statement', ''))):
+                        symptom_warning = "\n\n⚠️ This file contains error handling/logging code. " \
+                                        "Consider: Is this where the error APPEARS or where it needs to be FIXED?\n"
+                        tool_output_to_store = tool_output_to_store + symptom_warning
+                        LOG.debug("Detected potential symptom location, added warning")
 
                     if data_point['turns'] and len(data_point['turns']) > 0:
                         current_turn = data_point['turns'][-1]

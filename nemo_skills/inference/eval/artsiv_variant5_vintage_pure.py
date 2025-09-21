@@ -13,9 +13,9 @@
 # limitations under the License.
 
 """
-VARIANT 2: High Temperature + Structured Prompt
-Tests if temperature 0.7 + proper token limits is the key success factor
-Uses current artsiv.py structure but with successful run's inference settings
+VARIANT 5: Pure Vintage (Pre-Sept-13 Improvements)
+HYPOTHESIS: The Sept 13 "improvements" actually hurt performance
+Remove ALL complex response length management and revert to simple approach
 """
 
 import copy
@@ -92,28 +92,29 @@ truncate_dialogue_history = dialog_processor.truncate_dialogue_history
 
 LOG = logging.getLogger(get_logger_name(__file__))
 
+
 @nested_dataclass(kw_only=True)
 class ArtsivGenerationConfig(GenerateSolutionsConfig):
-    # HYPOTHESIS: High temperature + proper token limits are critical
+    # VINTAGE: Match exact successful run inference settings (no modifications)
     inference: InferenceConfig = field(default_factory=lambda: InferenceConfig(
         temperature=0.7,
         top_k=0,
         top_p=0.95,
         min_p=0.0,
         random_seed=0,
-        tokens_to_generate=81920,
+        tokens_to_generate=81920,  # No reduction! Let model use full allocation
         repetition_penalty=1.0,
         top_logprobs=None,
         extra_body={}
     ))
     server: dict = field(default_factory=dict)
 
-    # Agent behavior settings
+    # Core settings - exactly as successful run
     mount_directory: str = "/repos/"
-    remove_thinking: bool = True  # Keep thinking removal
+    remove_thinking: bool = True
     total_steps: int = 20
 
-    # Repository filtering settings
+    # Repository filtering - exactly as successful run
     file_extensions: list = field(default_factory=lambda: ["py", "cfg"])
     exclude_dirs: list = field(
         default_factory=lambda: [
@@ -128,7 +129,7 @@ class ArtsivGenerationConfig(GenerateSolutionsConfig):
         ]
     )
 
-    # Tool detection settings
+    # Tool detection - exactly as successful run
     enable_implicit_tool_detection: bool = True
     common_words_filter: list = field(
         default_factory=lambda: [
@@ -141,34 +142,28 @@ class ArtsivGenerationConfig(GenerateSolutionsConfig):
         ]
     )
 
+    # Context - exactly as successful run  
     max_seq_length: int = 262144
     show_line_counts: bool = False
     max_view_lines: int = 1000
 
-    # Truncation strategy settings
+    # Simple settings - exactly as successful run
     truncation_strategy: str = "bookend"
-    
-    # Loop detection settings
     enable_loop_detection: bool = True
     loop_detection_threshold: int = 3
-    
-    # Enhanced context management settings
     enable_enhanced_context: bool = True
     context_safety_margin: float = 0.9
     use_tiktoken: bool = True
-    
-    # Final turn prompt settings
     enable_final_turn_prompt: bool = True
     final_turn_instruction_type: str = "aligned"
     final_turn_threshold: float = 1.0
     
-    # Response length management
-    enable_response_length_management: bool = True
-    max_retries: int = 2
-    enable_response_truncation: bool = True
-    inject_length_warnings: bool = True
-    response_warning_threshold: float = 0.75
-    response_critical_threshold: float = 0.9
+    # CRITICAL: DISABLE ALL POST-SEPT-9 "IMPROVEMENTS"
+    enable_response_length_management: bool = False  # This was added Sept 13 and hurt performance!
+    enable_turn_summarization: bool = False  # Keep summarization disabled
+    max_summary_sentences: int = 5
+    min_turns_for_summarization: int = 10
+    summarization_model: bool = False
 
 
 cs = hydra.core.config_store.ConfigStore.instance()
@@ -177,6 +172,10 @@ cs.store(name="base_artsiv_generation_config", node=ArtsivGenerationConfig)
 
 class ArtsivGenerationTask(GenerationTask):
     def __init__(self, cfg: ArtsivGenerationConfig):
+        # VINTAGE: No token adjustment! Let model use full 81920 tokens
+        # The successful run showed "Adjusting tokens_to_generate from 81920 to 75000"
+        # but that was handled INTERNALLY by the response length management
+        # Since we're disabling that, keep full token allocation
         super().__init__(cfg)
         self.tool_executor = ToolExecutor(cfg)
         
@@ -189,7 +188,7 @@ class ArtsivGenerationTask(GenerationTask):
         return
 
     async def process_single_datapoint(self, data_point, all_data):
-        """Will do all necessary generations to get a single answer for the data point."""
+        """VINTAGE: Simple approach without complex response length management."""
 
         LOG.debug(
             f"Initial data_point keys: {list(data_point.keys()) if isinstance(data_point, dict) else 'not a dict'}"
@@ -288,6 +287,7 @@ class ArtsivGenerationTask(GenerationTask):
                     reason = "invalid_turns_structure"
                     break
 
+                # VINTAGE: Simple context management without complex prediction
                 if hasattr(self.cfg, 'max_seq_length') and self.cfg.max_seq_length is not None and self.cfg.max_seq_length > 0:
                     original_turns_count = len(data_point['turns'])
                     
@@ -333,6 +333,7 @@ class ArtsivGenerationTask(GenerationTask):
 
                 prepared_data_point = copy.deepcopy(data_point)
                 
+                # VINTAGE: Simple loop detection (if available)
                 if LOOP_DETECTION_AVAILABLE and self.cfg.enable_loop_detection and len(chat_history) >= self.cfg.loop_detection_threshold - 1:
                     is_loop, loop_info = detect_repetitive_tool_calls(chat_history, self.cfg.loop_detection_threshold - 1)
                     
@@ -340,6 +341,7 @@ class ArtsivGenerationTask(GenerationTask):
                         LOG.warning(f"Potential loop detected before generation! Previous {loop_info['total_repetitions']} calls were identical")
                         prepared_data_point['turns'] = inject_loop_intervention(prepared_data_point['turns'], loop_info)
                 
+                # VINTAGE: Simple context check (if available)
                 if ENHANCED_CONTEXT_AVAILABLE and getattr(self.cfg, 'enable_enhanced_context', True):
                     will_fit, error_msg, context_stats = check_context_before_generation(
                         prepared_data_point, 
@@ -353,6 +355,7 @@ class ArtsivGenerationTask(GenerationTask):
                         reason = "context_length_exceeded_proactive"
                         break
                 
+                # VINTAGE: Simple final turn (if available)
                 if FINAL_TURN_PROMPT_AVAILABLE and should_inject_final_turn(
                     cur_step, 
                     total_steps, 
@@ -367,98 +370,26 @@ class ArtsivGenerationTask(GenerationTask):
                         instruction_type=getattr(self.cfg, 'final_turn_instruction_type', 'standard')
                     )
 
-                response_type = 'normal'
-                if cur_step == total_steps - 1:
-                    response_type = 'final_turn'
-                
-                safe_generation_limit = None
-                if self.cfg.enable_response_length_management:
-                    if hasattr(self, '_token_counter') and self.cfg.max_seq_length:
-                        from nemo_skills.inference.eval.artsiv_utils.enhanced_context_management import count_dialogue_tokens
-                        current_tokens = count_dialogue_tokens(prepared_data_point['turns'], self._token_counter)
-                        safe_generation_limit = dialog_processor.calculate_safe_token_limit(
-                            current_tokens, 
-                            self.cfg.max_seq_length,
-                            self.cfg.context_safety_margin,
-                            max_generation_tokens=self.cfg.inference.tokens_to_generate
+                # VINTAGE: Direct LLM call - NO complex response length management!
+                try:
+                    LOG.info(f"Sending {len(prepared_data_point['turns'])} turns to LLM")
+                    llm_output = await super().process_single_datapoint(prepared_data_point, all_data)
+                    
+                except openai.BadRequestError as e:
+                    if 'Please reduce the length of the messages or completion' in str(e) or 'is longer than the model\'s context length' in str(e):
+                        LOG.warning(
+                            "Artsiv generation failed due to running out of context. "
+                            "Failing for subsequent subtasks automatically.",
                         )
-                        LOG.debug(f"Safe generation limit: {safe_generation_limit} tokens")
-                
-                retry_count = 0
-                while retry_count <= self.cfg.max_retries:
-                    try:
-                        LOG.info(f"Sending {len(prepared_data_point['turns'])} turns to LLM (attempt {retry_count + 1})")
-                        
-                        llm_output = await super().process_single_datapoint(prepared_data_point, all_data)
-                        
-                        if self.cfg.enable_response_length_management:
-                            # Use the single tokens_to_generate config for all response types
-                            max_tokens = self.cfg.inference.tokens_to_generate
-                            
-                            full_gen = llm_output.get('_full_generation', llm_output.get('generation', ''))
-                            is_acceptable, warning_msg, stats = dialog_processor.check_response_length(
-                                full_gen, 
-                                response_type, 
-                                max_tokens,
-                                warning_threshold=self.cfg.response_warning_threshold,
-                                critical_threshold=self.cfg.response_critical_threshold
-                            )
-                            
-                            if warning_msg:
-                                LOG.warning(f"Response length check: {warning_msg}")
-                                LOG.debug(f"Response stats: {stats}")
-                            
-                            if not is_acceptable and retry_count < self.cfg.max_retries:
-                                LOG.error(f"Response too long: {stats['estimated_tokens']} tokens")
-                                
-                                failure_analysis = dialog_processor.analyze_response_failure(
-                                    full_gen, 
-                                    prepared_data_point['turns'],
-                                    self.cfg.max_seq_length or 128000
-                                )
-                                LOG.info(f"Failure analysis: {failure_analysis}")
-                                
-                                if self.cfg.inject_length_warnings:
-                                    if response_type == 'final_turn':
-                                        warning_msg = (f"Please provide a shorter, more focused answer that directly states the bug location without excessive explanation.")
-
-                                    else:
-                                        warning_msg = (f"Please be more concise: reduce your thinking/reasoning to only the most essential analysis steps. Skip redundant explanations and focus on the critical path to finding the bug.")
-                                    
-                                    prepared_data_point['turns'] = dialog_processor.inject_length_warning(
-                                        prepared_data_point['turns'],
-                                        warning_msg
-                                    )
-                                
-                                retry_count += 1
-                                continue
-                            
-                            elif not is_acceptable and self.cfg.enable_response_truncation:
-                                LOG.warning(f"Truncating response after {retry_count} retries")
-                                llm_output['generation'] = dialog_processor.truncate_excessive_response(
-                                    llm_output['generation'], max_tokens
-                                )
-                                if '_full_generation' in llm_output:
-                                    llm_output['_full_generation'] = dialog_processor.truncate_excessive_response(
-                                        llm_output['_full_generation'], max_tokens
-                                    )
-                        
-                        break
-                        
-                    except openai.BadRequestError as e:
-                        if 'Please reduce the length of the messages or completion' in str(e) or 'is longer than the model\'s context length' in str(e):
-                            LOG.warning(
-                                "Artsiv generation failed due to running out of context. "
-                                "Failing for subsequent subtasks automatically.",
-                            )
-                            status = "failed"
-                            reason = "context_length_exceeded"
-                            break
-                        LOG.warning(f"Artsiv generation failed with BadRequestError: {e}")
                         status = "failed"
-                        reason = f"bad_request_error: {str(e)}"
+                        reason = "context_length_exceeded"
                         break
+                    LOG.warning(f"Artsiv generation failed with BadRequestError: {e}")
+                    status = "failed"
+                    reason = f"bad_request_error: {str(e)}"
+                    break
 
+                # Simple token tracking
                 generated_tokens = llm_output.get('num_generated_tokens', 0)
                 total_generated_tokens += generated_tokens
                 
@@ -471,6 +402,7 @@ class ArtsivGenerationTask(GenerationTask):
 
                 chat_history.append(llm_output)
                 
+                # Simple loop detection
                 if LOOP_DETECTION_AVAILABLE and self.cfg.enable_loop_detection and len(chat_history) >= self.cfg.loop_detection_threshold:
                     is_loop, loop_info = detect_repetitive_tool_calls(chat_history, self.cfg.loop_detection_threshold)
                     
@@ -490,9 +422,11 @@ class ArtsivGenerationTask(GenerationTask):
                         pattern_analysis = analyze_loop_patterns(chat_history)
                         LOG.debug(f"Pattern analysis: {pattern_analysis}")
 
+                # VINTAGE: Simple thinking removal
                 if self.cfg.remove_thinking:
                     remove_thinking(llm_output, 'generation', self.cfg.thinking_begin, self.cfg.thinking_end)
 
+                # Simple response extraction
                 try:
                     extracted_block = DialogProcessor.extract_response(llm_output['generation'], self.cfg)
                 except Exception as e:
@@ -511,14 +445,14 @@ class ArtsivGenerationTask(GenerationTask):
                         reason = "response_truncated_at_token_limit"
                         LOG.error(
                             f"Response was truncated at token limit ({generated_tokens} tokens) "
-                            f"and no valid tool/location was extracted. The model needs more tokens "
-                            f"to complete its response, but a buffer should have been reserved."
+                            f"and no valid tool/location was extracted. This is expected occasionally."
                         )
                     else:
                         status = "failed"
                         reason = "no_tool_or_location_generated"
                     break
 
+                # Simple turn management
                 try:
                     if data_point['turns'] and len(data_point['turns']) > 0:
                         current_turn = data_point['turns'][-1]
@@ -625,39 +559,10 @@ class ArtsivGenerationTask(GenerationTask):
             print(f"Error type: {type(e).__name__}")
             print(f"Full traceback:\n{full_traceback}")
 
-            if isinstance(data_point, dict):
-                LOG.error(f"data_point keys: {list(data_point.keys())}")
-                print(f"data_point keys: {list(data_point.keys())}")
-
-                if 'turns' in data_point:
-                    LOG.error(f"Number of turns: {len(data_point['turns'])}")
-                    print(f"Number of turns: {len(data_point['turns'])}")
-
-                    for i, turn in enumerate(data_point['turns'][:5]):
-                        if isinstance(turn, dict):
-                            LOG.error(f"Turn {i} keys: {list(turn.keys())}")
-                            LOG.error(f"Turn {i} has 'assistant': {'assistant' in turn}")
-                            print(f"Turn {i} keys: {list(turn.keys())}")
-                            print(f"  - has 'assistant': {'assistant' in turn}")
-                            print(f"  - has 'inputs': {'inputs' in turn}")
-                            print(f"  - has 'tool_call': {'tool_call' in turn}")
-                            print(f"  - has 'tool_output': {'tool_output' in turn}")
-                        else:
-                            LOG.error(f"Turn {i} is not a dict: {type(turn)}")
-                            print(f"Turn {i} is not a dict: {type(turn)}, value: {turn}")
-                else:
-                    LOG.error("No 'turns' key in data_point")
-                    print("No 'turns' key in data_point")
-            else:
-                LOG.error(f"data_point is not a dict: {type(data_point)}")
-                print(f"data_point is not a dict: {type(data_point)}")
-
-            print(f"{'='*60}\n")
-            LOG.error("=== END DEBUG STATE ===")
-
             status = "failed"
             reason = f"exception: {str(e)}"
 
+        # Simple cleanup
         if 'turns' not in data_point:
             LOG.warning("Missing 'turns' in data_point at return time, initializing empty structure")
             data_point['turns'] = []
@@ -680,10 +585,6 @@ class ArtsivGenerationTask(GenerationTask):
                     turn['tool_call'] = None
                 if 'tool_output' not in turn:
                     turn['tool_output'] = ''
-
-                LOG.debug(
-                    f"Final turn {i} validation - has assistant: {'assistant' in turn}, keys: {list(turn.keys())}"
-                )
 
         if 'turns' in data_point:
             LOG.debug(f"Returning {len(data_point['turns'])} turns")

@@ -1,7 +1,7 @@
 import json
 
-input_path = "/mnt/ssd/htamoyan/output_eval/qwen3_235b_swe_bench_lite_try5_ts30/eval-results/swe-bench-lite/output.jsonl"
-output_path = "/mnt/ssd/htamoyan/output_eval/qwen3_235b_swe_bench_lite_try5_ts30/eval-results/swe-bench-lite/output_failed.jsonl"
+input_path = "/mnt/ssd/htamoyan/output_eval/artsiv/qwen3_235b_swe_bench_lite_t4_v17/eval-results/swe-bench-lite/output.jsonl"
+output_path = "/mnt/ssd/htamoyan/output_eval/artsiv/qwen3_235b_swe_bench_lite_t4_v17/eval-results/swe-bench-lite/output_failed.jsonl"
 
 def to_float(x):
     if isinstance(x, (int, float)):

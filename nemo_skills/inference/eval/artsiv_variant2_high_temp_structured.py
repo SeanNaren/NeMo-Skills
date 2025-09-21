@@ -96,12 +96,12 @@ LOG = logging.getLogger(get_logger_name(__file__))
 class ArtsivGenerationConfig(GenerateSolutionsConfig):
     # HYPOTHESIS: High temperature + proper token limits are critical
     inference: InferenceConfig = field(default_factory=lambda: InferenceConfig(
-        temperature=0.7,
+        temperature=0.7,  # CRITICAL: Changed from 0.0 to 0.7
         top_k=0,
         top_p=0.95,
         min_p=0.0,
         random_seed=0,
-        tokens_to_generate=81920,
+        tokens_to_generate=81920,  # CRITICAL: Changed from 2048 to 81920
         repetition_penalty=1.0,
         top_logprobs=None,
         extra_body={}
@@ -141,7 +141,8 @@ class ArtsivGenerationConfig(GenerateSolutionsConfig):
         ]
     )
 
-    max_seq_length: int = 262144
+    # CRITICAL: Match successful run's context settings
+    max_seq_length: int = 262144  # Changed from None to 262144
     show_line_counts: bool = False
     max_view_lines: int = 1000
 
@@ -162,13 +163,16 @@ class ArtsivGenerationConfig(GenerateSolutionsConfig):
     final_turn_instruction_type: str = "aligned"
     final_turn_threshold: float = 1.0
     
-    # Response length management
+    # Response length management - match successful run
     enable_response_length_management: bool = True
-    max_retries: int = 2
+    max_response_tokens: int = 60000
+    max_thinking_tokens: int = 70000
+    max_final_turn_tokens: int = 40000
+    response_length_retry_limit: int = 20000
     enable_response_truncation: bool = True
     inject_length_warnings: bool = True
-    response_warning_threshold: float = 0.75
-    response_critical_threshold: float = 0.9
+    max_allowed_generation_tokens: int = 75000
+    generation_buffer_tokens: int = 5000
 
 
 cs = hydra.core.config_store.ConfigStore.instance()
@@ -177,6 +181,22 @@ cs.store(name="base_artsiv_generation_config", node=ArtsivGenerationConfig)
 
 class ArtsivGenerationTask(GenerationTask):
     def __init__(self, cfg: ArtsivGenerationConfig):
+        # Apply the same token adjustment as successful run
+        original_tokens = cfg.inference.tokens_to_generate
+        if cfg.enable_response_length_management:
+            safe_limit = original_tokens - cfg.generation_buffer_tokens
+            if safe_limit < cfg.max_allowed_generation_tokens:
+                effective_limit = safe_limit
+            else:
+                effective_limit = cfg.max_allowed_generation_tokens
+            
+            if original_tokens > effective_limit:
+                LOG.warning(
+                    f"Adjusting tokens_to_generate from {original_tokens} to {effective_limit} "
+                    f"to ensure {cfg.generation_buffer_tokens} token buffer for response completion."
+                )
+                cfg.inference.tokens_to_generate = effective_limit
+        
         super().__init__(cfg)
         self.tool_executor = ToolExecutor(cfg)
         
@@ -379,36 +399,49 @@ class ArtsivGenerationTask(GenerationTask):
                         safe_generation_limit = dialog_processor.calculate_safe_token_limit(
                             current_tokens, 
                             self.cfg.max_seq_length,
-                            self.cfg.context_safety_margin,
-                            max_generation_tokens=self.cfg.inference.tokens_to_generate
+                            self.cfg.context_safety_margin
                         )
                         LOG.debug(f"Safe generation limit: {safe_generation_limit} tokens")
                 
                 retry_count = 0
-                while retry_count <= self.cfg.max_retries:
+                max_retries = 2
+                
+                while retry_count <= max_retries:
                     try:
                         LOG.info(f"Sending {len(prepared_data_point['turns'])} turns to LLM (attempt {retry_count + 1})")
                         
+                        if retry_count > 0:
+                            original_tokens_to_generate = self.cfg.inference.tokens_to_generate
+                            self.cfg.inference.tokens_to_generate = self.cfg.response_length_retry_limit
+                            LOG.warning(f"Retry {retry_count}: Using stricter token limit of {self.cfg.response_length_retry_limit}")
+                        
                         llm_output = await super().process_single_datapoint(prepared_data_point, all_data)
                         
+                        if retry_count > 0:
+                            self.cfg.inference.tokens_to_generate = original_tokens_to_generate
+                        
                         if self.cfg.enable_response_length_management:
-                            # Use the single tokens_to_generate config for all response types
-                            max_tokens = self.cfg.inference.tokens_to_generate
+                            has_thinking = '_has_think_tags' in llm_output and llm_output['_has_think_tags']
+                            if has_thinking:
+                                max_tokens = self.cfg.max_thinking_tokens
+                                check_type = 'thinking'
+                            elif response_type == 'final_turn':
+                                max_tokens = self.cfg.max_final_turn_tokens
+                                check_type = 'final_turn'
+                            else:
+                                max_tokens = self.cfg.max_response_tokens
+                                check_type = 'normal'
                             
                             full_gen = llm_output.get('_full_generation', llm_output.get('generation', ''))
                             is_acceptable, warning_msg, stats = dialog_processor.check_response_length(
-                                full_gen, 
-                                response_type, 
-                                max_tokens,
-                                warning_threshold=self.cfg.response_warning_threshold,
-                                critical_threshold=self.cfg.response_critical_threshold
+                                full_gen, check_type, max_tokens
                             )
                             
                             if warning_msg:
                                 LOG.warning(f"Response length check: {warning_msg}")
                                 LOG.debug(f"Response stats: {stats}")
                             
-                            if not is_acceptable and retry_count < self.cfg.max_retries:
+                            if not is_acceptable and retry_count < max_retries:
                                 LOG.error(f"Response too long: {stats['estimated_tokens']} tokens")
                                 
                                 failure_analysis = dialog_processor.analyze_response_failure(
@@ -419,15 +452,9 @@ class ArtsivGenerationTask(GenerationTask):
                                 LOG.info(f"Failure analysis: {failure_analysis}")
                                 
                                 if self.cfg.inject_length_warnings:
-                                    if response_type == 'final_turn':
-                                        warning_msg = (f"Please provide a shorter, more focused answer that directly states the bug location without excessive explanation.")
-
-                                    else:
-                                        warning_msg = (f"Please be more concise: reduce your thinking/reasoning to only the most essential analysis steps. Skip redundant explanations and focus on the critical path to finding the bug.")
-                                    
                                     prepared_data_point['turns'] = dialog_processor.inject_length_warning(
                                         prepared_data_point['turns'],
-                                        warning_msg
+                                        f"Previous response was too long ({stats['estimated_tokens']} tokens). Maximum allowed: {max_tokens} tokens"
                                     )
                                 
                                 retry_count += 1

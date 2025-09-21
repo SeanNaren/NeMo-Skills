@@ -12,12 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""
-VARIANT 2: High Temperature + Structured Prompt
-Tests if temperature 0.7 + proper token limits is the key success factor
-Uses current artsiv.py structure but with successful run's inference settings
-"""
-
 import copy
 import importlib
 import logging
@@ -79,7 +73,10 @@ try:
 except ImportError:
     FINAL_TURN_PROMPT_AVAILABLE = False
 
+# Response length management functions are now in dialog_processor
+
 PROMPT_TEMPLATE_VERSION: str = "v4"
+
 
 module_base = f"nemo_skills.inference.eval.artsiv_utils.{PROMPT_TEMPLATE_VERSION}"
 
@@ -88,87 +85,194 @@ tool_executor = importlib.import_module(f"{module_base}.tool_executor")
 
 DialogProcessor = dialog_processor.DialogProcessor
 ToolExecutor = tool_executor.ToolExecutor
+# Import only the token management functions we need from dialog_processor
 truncate_dialogue_history = dialog_processor.truncate_dialogue_history
 
 LOG = logging.getLogger(get_logger_name(__file__))
 
+
 @nested_dataclass(kw_only=True)
 class ArtsivGenerationConfig(GenerateSolutionsConfig):
-    # HYPOTHESIS: High temperature + proper token limits are critical
-    inference: InferenceConfig = field(default_factory=lambda: InferenceConfig(
-        temperature=0.7,
-        top_k=0,
-        top_p=0.95,
-        min_p=0.0,
-        random_seed=0,
-        tokens_to_generate=81920,
-        repetition_penalty=1.0,
-        top_logprobs=None,
-        extra_body={}
-    ))
-    server: dict = field(default_factory=dict)
+    # Core inference settings
+    inference: InferenceConfig = field(default_factory=InferenceConfig)  # LLM call parameters
+    server: dict = field(default_factory=dict)  # Server configuration for model hosting
 
     # Agent behavior settings
-    mount_directory: str = "/repos/"
-    remove_thinking: bool = True  # Keep thinking removal
-    total_steps: int = 20
+    mount_directory: str = "/repos/"  # Directory where repositories are mounted
+    remove_thinking: bool = True  # Whether to strip thinking tags from output
+    total_steps: int = 20  # Maximum number of agent steps per problem
 
     # Repository filtering settings
-    file_extensions: list = field(default_factory=lambda: ["py", "cfg"])
-    exclude_dirs: list = field(
+    file_extensions: list = field(default_factory=lambda: ["py", "cfg"])  # File types to include in repo
+    exclude_dirs: list = field(  # Directory names to exclude from repository analysis
         default_factory=lambda: [
-            "test", "tests", "testing", "test_", "_test", "__pycache__", ".git", ".github",
-            "docs", "examples", "scripts", "tools", "venv", "env", "node_modules", "dist",
-            "build", "target", "bin", "obj", "coverage", ".pytest_cache", ".tox", ".mypy_cache",
-            "locale", "translations", "i18n", "l10n", "static", "assets", "media", "uploads",
-            "logs", "tmp", "temp", "vendor", "libs", "dependencies", "settings", "local_settings",
-            "fixtures", "data", "datasets", "notebooks", "jupyter", "ipynb_checkpoints", "deploy",
-            "deployment", "docker", "kubernetes", "ci", "cd", "github", "gitlab", "bitbucket",
-            "readme", "license", "changelog", "contributing",
+            "test",
+            "tests",
+            "testing",
+            "test_",
+            "_test",
+            "__pycache__",
+            ".git",
+            ".github",
+            "docs",
+            "examples",
+            "scripts",
+            "tools",
+            # "utils",  # Removed - too many legitimate utility files
+            # "migrations",  # Removed - Django migrations contain bug fixes
+            "venv",
+            "env",
+            "node_modules",
+            "dist",
+            "build",
+            "target",
+            "bin",
+            "obj",
+            "coverage",
+            ".pytest_cache",
+            ".tox",
+            ".mypy_cache",
+            "locale",
+            "translations",
+            "i18n",
+            "l10n",
+            "static",
+            "assets",
+            "media",
+            "uploads",
+            "logs",
+            "tmp",
+            "temp",
+            # "cache", - Removed - django/core/cache/backends/filebased.py from swe-bench lite
+            "vendor",
+            # "lib",  # Removed - matplotlib's main source directory!
+            "libs",
+            "dependencies",
+            # "config",  # Removed - configuration files often have bugs
+            # "conf",    # Removed - configuration files often have bugs
+            "settings",
+            "local_settings",
+            "fixtures",
+            "data",
+            "datasets",
+            "notebooks",
+            "jupyter",
+            "ipynb_checkpoints",
+            "deploy",
+            "deployment",
+            "docker",
+            "kubernetes",
+            "ci",
+            "cd",
+            "github",
+            "gitlab",
+            "bitbucket",
+            "readme",
+            "license",
+            "changelog",
+            "contributing",
         ]
     )
 
-    # Tool detection settings
-    enable_implicit_tool_detection: bool = True
-    common_words_filter: list = field(
+    # Tool detection and search settings
+    enable_implicit_tool_detection: bool = True  # Enable fallback tool detection when no explicit calls found
+    common_words_filter: list = field(  # Words to filter out when detecting implicit search queries
         default_factory=lambda: [
-            "the", "and", "or", "but", "in", "on", "at", "to", "for", "of", "with", "by",
-            "is", "are", "was", "were", "be", "been", "have", "has", "had", "do", "does", "did",
-            "will", "would", "could", "should", "may", "might", "can", "this", "that", "these", "those",
-            "a", "an", "as", "if", "then", "else", "when", "where", "why", "how", "what", "which",
-            "who", "whom", "whose", "need", "find", "search", "look", "function", "class", "method",
-            "variable", "query",
+            "the",
+            "and",
+            "or",
+            "but",
+            "in",
+            "on",
+            "at",
+            "to",
+            "for",
+            "of",
+            "with",
+            "by",
+            "is",
+            "are",
+            "was",
+            "were",
+            "be",
+            "been",
+            "have",
+            "has",
+            "had",
+            "do",
+            "does",
+            "did",
+            "will",
+            "would",
+            "could",
+            "should",
+            "may",
+            "might",
+            "can",
+            "this",
+            "that",
+            "these",
+            "those",
+            "a",
+            "an",
+            "as",
+            "if",
+            "then",
+            "else",
+            "when",
+            "where",
+            "why",
+            "how",
+            "what",
+            "which",
+            "who",
+            "whom",
+            "whose",
+            "need",
+            "find",
+            "search",
+            "look",
+            "function",
+            "class",
+            "method",
+            "variable",
+            "query",
         ]
     )
 
-    max_seq_length: int = 262144
-    show_line_counts: bool = False
-    max_view_lines: int = 1000
+    max_seq_length: int | None = None  # Maximum context length in tokens (set via CLI)
+
+    # Display settings
+    show_line_counts: bool = False  # Show file line counts in repository tree output
+    max_view_lines: int = 1000  # Maximum lines to show in view tool (0 = no limit) - reduced from 1000 to 300
 
     # Truncation strategy settings
-    truncation_strategy: str = "bookend"
+    truncation_strategy: str = "bookend"  # Options: "sequential" (default), "bookend", "smart_bookend", "enhanced"
     
     # Loop detection settings
-    enable_loop_detection: bool = True
-    loop_detection_threshold: int = 3
+    enable_loop_detection: bool = True  # Enable detection and prevention of repetitive tool calls
+    loop_detection_threshold: int = 3  # Number of identical calls to trigger loop detection
     
     # Enhanced context management settings
-    enable_enhanced_context: bool = True
-    context_safety_margin: float = 0.9
-    use_tiktoken: bool = True
+    enable_enhanced_context: bool = True  # Use enhanced context management with better token counting
+    context_safety_margin: float = 0.9  # Use only this fraction of max context (0.9 = 90%)
+    use_tiktoken: bool = True  # Use tiktoken for accurate token counting if available
     
     # Final turn prompt settings
-    enable_final_turn_prompt: bool = True
-    final_turn_instruction_type: str = "aligned"
-    final_turn_threshold: float = 1.0
+    enable_final_turn_prompt: bool = True  # Inject instruction on final turn to force location prediction
+    final_turn_instruction_type: str = "aligned"  # Type of instruction: aligned, standard, urgent, gentle, detailed
+    final_turn_threshold: float = 1.0  # When to trigger (1.0 = only last turn, 0.8 = last 20% of turns)
     
-    # Response length management
-    enable_response_length_management: bool = True
-    max_retries: int = 2
-    enable_response_truncation: bool = True
-    inject_length_warnings: bool = True
-    response_warning_threshold: float = 0.75
-    response_critical_threshold: float = 0.9
+    # Response length management settings (SUCCESSFUL RUN CONFIGURATION)
+    enable_response_length_management: bool = True  # Monitor and control response lengths
+    max_response_tokens: int = 60000  # Maximum tokens per normal response
+    max_thinking_tokens: int = 70000  # Maximum tokens for responses with thinking
+    max_final_turn_tokens: int = 40000  # Maximum tokens for final turn
+    response_length_retry_limit: int = 20000  # Strict token limit for retries after length failures
+    enable_response_truncation: bool = True  # Truncate overly long responses
+    inject_length_warnings: bool = True  # Inject warnings when responses are too long
+    max_allowed_generation_tokens: int = 75000  # Hard cap to ensure buffer for proper completion
+    generation_buffer_tokens: int = 5000  # Reserve tokens to ensure model can complete its output
 
 
 cs = hydra.core.config_store.ConfigStore.instance()
@@ -177,9 +281,27 @@ cs.store(name="base_artsiv_generation_config", node=ArtsivGenerationConfig)
 
 class ArtsivGenerationTask(GenerationTask):
     def __init__(self, cfg: ArtsivGenerationConfig):
+        # Ensure we have a buffer for model to complete its output
+        original_tokens = cfg.inference.tokens_to_generate
+        if cfg.enable_response_length_management:
+            # Always reserve some tokens for the model to properly complete its response
+            safe_limit = original_tokens - cfg.generation_buffer_tokens
+            if safe_limit < cfg.max_allowed_generation_tokens:
+                effective_limit = safe_limit
+            else:
+                effective_limit = cfg.max_allowed_generation_tokens
+            
+            if original_tokens > effective_limit:
+                LOG.warning(
+                    f"Adjusting tokens_to_generate from {original_tokens} to {effective_limit} "
+                    f"to ensure {cfg.generation_buffer_tokens} token buffer for response completion."
+                )
+                cfg.inference.tokens_to_generate = effective_limit
+        
         super().__init__(cfg)
         self.tool_executor = ToolExecutor(cfg)
         
+        # Log truncation strategy info
         if not BOOKEND_TRUNCATION_AVAILABLE and cfg.truncation_strategy in ['bookend', 'smart_bookend']:
             LOG.warning(f"Bookend truncation module not available. Falling back to sequential truncation.")
         else:
@@ -191,12 +313,14 @@ class ArtsivGenerationTask(GenerationTask):
     async def process_single_datapoint(self, data_point, all_data):
         """Will do all necessary generations to get a single answer for the data point."""
 
+        # Log initial state of data_point for debugging
         LOG.debug(
             f"Initial data_point keys: {list(data_point.keys()) if isinstance(data_point, dict) else 'not a dict'}"
         )
         if 'turns' in data_point:
             LOG.debug(f"Initial turns structure: {data_point['turns']}")
 
+        # Filter out samples with empty problem statements
         if not data_point.get('problem_statement', '').strip():
             LOG.warning(
                 f"Skipping data point {data_point.get('instance_id', 'unknown')} due to empty problem statement"
@@ -207,16 +331,19 @@ class ArtsivGenerationTask(GenerationTask):
                 'num_turns': 0,
                 'status': 'skipped',
                 'reason': 'empty_problem_statement',
-                'turns': [],
+                'turns': [],  # Include empty turns array for consistency
             }
 
         total_steps = self.cfg.total_steps
         chat_history = []
         total_generated_tokens = 0
 
+        # Initialize or fix turns structure early to ensure it always exists with proper fields
         if 'turns' in data_point and isinstance(data_point['turns'], list) and len(data_point['turns']) > 0:
+            # Ensure existing turns have all required fields
             for i, turn in enumerate(data_point['turns']):
                 if isinstance(turn, dict):
+                    # Add missing fields with default values
                     turn.setdefault('inputs', '')
                     turn.setdefault('assistant', '')
                     turn.setdefault('tool_call', None)
@@ -225,28 +352,41 @@ class ArtsivGenerationTask(GenerationTask):
                         f"Turn {i} after setdefault - keys: {list(turn.keys())}, has assistant: {'assistant' in turn}"
                     )
                 else:
+                    # Replace non-dict turn with proper structure
                     LOG.warning(f"Found non-dict turn at index {i}: {type(turn)}, replacing with empty structure")
                     data_point['turns'][i] = {"inputs": "", "assistant": "", "tool_call": None, "tool_output": ""}
         else:
+            # Initialize new turns structure
             data_point['turns'] = [{"inputs": "", "assistant": "", "tool_call": None, "tool_output": ""}]
 
         try:
             instance_filepath = Path(self.cfg.mount_directory).joinpath(f"{data_point['instance_id']}.pkl")
 
+            # repo_dict is dict with 'structure' containing the actual repo tree dict_keys(['repo', 'base_commit',
+            # 'structure', 'instance_id'])
             with open(instance_filepath, 'rb') as f:
                 repo_dict = pickle.load(f)
             repo_dict = filter_repo_dict(repo_dict, self.cfg.exclude_dirs, self.cfg.file_extensions)
             tree_structure = tree_repo_dict(repo_dict, self.cfg.show_line_counts)
 
+            # Calculate ground truth files percentage using utility function
             ground_truth_in_repo_percentage = 0.0
             if 'patch' in data_point and data_point['patch']:
                 try:
+                    # Extract file paths from patch
                     locations = extract_locations_from_patch(data_point['patch'])
+
+                    # Use utility function to calculate percentage
                     ground_truth_in_repo_percentage, debug_info = calculate_ground_truth_percentage(
                         repo_dict, locations, self.cfg.exclude_dirs, self.cfg.file_extensions
                     )
+
+                    # Log debug info if needed
                     LOG.debug(f"Ground truth check debug info: {debug_info}")
+                    
+                    # Store missing files info for aggregation
                     data_point['_missing_ground_truth_files'] = debug_info.get('missing_files_details', [])
+
                 except Exception as e:
                     LOG.warning(f"Error checking ground truth files: {e}")
 
@@ -260,24 +400,27 @@ class ArtsivGenerationTask(GenerationTask):
 {tree_structure}
 """
 
+            # Update the first turn with actual content
             data_point['turns'][0]['inputs'] = inputs
             LOG.debug(f"Initialized turns with problem statement, turn count: {len(data_point['turns'])}")
 
         except Exception as e:
             LOG.error(f"Error loading repository for instance {data_point.get('instance_id', 'unknown')}: {e}")
+            # Return early with error status
             return {
                 'generation': [],
                 'total_generated_tokens': 0,
                 'num_turns': 0,
                 'status': 'failed',
                 'reason': f'repository_loading_error: {str(e)}',
-                'turns': data_point['turns'],
+                'turns': data_point['turns'],  # Will have the empty structure
             }
 
         reason = None
         status = None
         try:
             for cur_step in range(total_steps):
+                # Validate turns structure at the beginning of each iteration
                 if (
                     'turns' not in data_point
                     or not isinstance(data_point['turns'], list)
@@ -288,19 +431,24 @@ class ArtsivGenerationTask(GenerationTask):
                     reason = "invalid_turns_structure"
                     break
 
+                # Check and truncate dialogue history if needed before making the LLM call
                 if hasattr(self.cfg, 'max_seq_length') and self.cfg.max_seq_length is not None and self.cfg.max_seq_length > 0:
                     original_turns_count = len(data_point['turns'])
                     
+                    # Apply selected truncation strategy
                     truncation_strategy = getattr(self.cfg, 'truncation_strategy', 'sequential')
                     
+                    # Use enhanced context management if available and enabled
                     if (ENHANCED_CONTEXT_AVAILABLE and 
                         getattr(self.cfg, 'enable_enhanced_context', True) and
                         (truncation_strategy == 'enhanced' or 
                          getattr(self.cfg, 'use_tiktoken', True))):
                         LOG.debug(f"Using enhanced context management")
+                        # Initialize token counter if not already done
                         if not hasattr(self, '_token_counter'):
                             self._token_counter = TokenCounter(getattr(self.cfg, 'model', 'gpt-4'))
                         
+                        # Use enhanced truncation
                         data_point['turns'], truncation_stats = enhanced_truncate_dialogue(
                             data_point['turns'], 
                             self.cfg.max_seq_length, 
@@ -321,6 +469,7 @@ class ArtsivGenerationTask(GenerationTask):
                             data_point['turns'], self.cfg.max_seq_length, self.cfg.inference.tokens_to_generate
                         )
                     else:
+                        # Default to sequential truncation (backwards compatible)
                         if truncation_strategy != 'sequential' and not BOOKEND_TRUNCATION_AVAILABLE:
                             LOG.warning(f"Truncation strategy '{truncation_strategy}' not available, using sequential")
                         LOG.debug(f"Using sequential truncation strategy")
@@ -331,15 +480,20 @@ class ArtsivGenerationTask(GenerationTask):
                     if len(data_point['turns']) < original_turns_count:
                         LOG.info(f"Truncated dialogue from {original_turns_count} to {len(data_point['turns'])} turns using {truncation_strategy} strategy")
 
+                # Use original data_point for LLM call
                 prepared_data_point = copy.deepcopy(data_point)
                 
+                # Loop prevention - check if we should modify the prompt to prevent repetition
                 if LOOP_DETECTION_AVAILABLE and self.cfg.enable_loop_detection and len(chat_history) >= self.cfg.loop_detection_threshold - 1:
+                    # Check for loops in existing history before generating
                     is_loop, loop_info = detect_repetitive_tool_calls(chat_history, self.cfg.loop_detection_threshold - 1)
                     
                     if is_loop:
                         LOG.warning(f"Potential loop detected before generation! Previous {loop_info['total_repetitions']} calls were identical")
+                        # Inject intervention message to prevent loop continuation
                         prepared_data_point['turns'] = inject_loop_intervention(prepared_data_point['turns'], loop_info)
                 
+                # Proactive context length check before making LLM call
                 if ENHANCED_CONTEXT_AVAILABLE and getattr(self.cfg, 'enable_enhanced_context', True):
                     will_fit, error_msg, context_stats = check_context_before_generation(
                         prepared_data_point, 
@@ -353,6 +507,7 @@ class ArtsivGenerationTask(GenerationTask):
                         reason = "context_length_exceeded_proactive"
                         break
                 
+                # Check if we should inject final turn instruction
                 if FINAL_TURN_PROMPT_AVAILABLE and should_inject_final_turn(
                     cur_step, 
                     total_steps, 
@@ -367,10 +522,13 @@ class ArtsivGenerationTask(GenerationTask):
                         instruction_type=getattr(self.cfg, 'final_turn_instruction_type', 'standard')
                     )
 
+
+                # Determine response type for token limits
                 response_type = 'normal'
                 if cur_step == total_steps - 1:
                     response_type = 'final_turn'
                 
+                # Calculate safe generation limit if response length management is enabled
                 safe_generation_limit = None
                 if self.cfg.enable_response_length_management:
                     if hasattr(self, '_token_counter') and self.cfg.max_seq_length:
@@ -379,38 +537,59 @@ class ArtsivGenerationTask(GenerationTask):
                         safe_generation_limit = dialog_processor.calculate_safe_token_limit(
                             current_tokens, 
                             self.cfg.max_seq_length,
-                            self.cfg.context_safety_margin,
-                            max_generation_tokens=self.cfg.inference.tokens_to_generate
+                            self.cfg.context_safety_margin
                         )
                         LOG.debug(f"Safe generation limit: {safe_generation_limit} tokens")
                 
+                # Track retry attempts for this turn
                 retry_count = 0
-                while retry_count <= self.cfg.max_retries:
+                max_retries = 2
+                
+                while retry_count <= max_retries:
                     try:
                         LOG.info(f"Sending {len(prepared_data_point['turns'])} turns to LLM (attempt {retry_count + 1})")
                         
+                        # Override tokens_to_generate for retries with stricter limits
+                        if retry_count > 0:
+                            original_tokens_to_generate = self.cfg.inference.tokens_to_generate
+                            self.cfg.inference.tokens_to_generate = self.cfg.response_length_retry_limit
+                            LOG.warning(f"Retry {retry_count}: Using stricter token limit of {self.cfg.response_length_retry_limit}")
+                        
                         llm_output = await super().process_single_datapoint(prepared_data_point, all_data)
                         
+                        # Restore original tokens_to_generate
+                        if retry_count > 0:
+                            self.cfg.inference.tokens_to_generate = original_tokens_to_generate
+                        
+                        # Check response length if management is enabled
                         if self.cfg.enable_response_length_management:
-                            # Use the single tokens_to_generate config for all response types
-                            max_tokens = self.cfg.inference.tokens_to_generate
+                            # Determine max tokens based on response type and content
+                            has_thinking = '_has_think_tags' in llm_output and llm_output['_has_think_tags']
+                            if has_thinking:
+                                max_tokens = self.cfg.max_thinking_tokens
+                                check_type = 'thinking'
+                            elif response_type == 'final_turn':
+                                max_tokens = self.cfg.max_final_turn_tokens
+                                check_type = 'final_turn'
+                            else:
+                                max_tokens = self.cfg.max_response_tokens
+                                check_type = 'normal'
                             
+                            # Check the full generation including thinking
                             full_gen = llm_output.get('_full_generation', llm_output.get('generation', ''))
                             is_acceptable, warning_msg, stats = dialog_processor.check_response_length(
-                                full_gen, 
-                                response_type, 
-                                max_tokens,
-                                warning_threshold=self.cfg.response_warning_threshold,
-                                critical_threshold=self.cfg.response_critical_threshold
+                                full_gen, check_type, max_tokens
                             )
                             
                             if warning_msg:
                                 LOG.warning(f"Response length check: {warning_msg}")
                                 LOG.debug(f"Response stats: {stats}")
                             
-                            if not is_acceptable and retry_count < self.cfg.max_retries:
+                            # If response is too long and we haven't exceeded retries
+                            if not is_acceptable and retry_count < max_retries:
                                 LOG.error(f"Response too long: {stats['estimated_tokens']} tokens")
                                 
+                                # Analyze the failure
                                 failure_analysis = dialog_processor.analyze_response_failure(
                                     full_gen, 
                                     prepared_data_point['turns'],
@@ -418,21 +597,17 @@ class ArtsivGenerationTask(GenerationTask):
                                 )
                                 LOG.info(f"Failure analysis: {failure_analysis}")
                                 
+                                # Inject warning for next attempt
                                 if self.cfg.inject_length_warnings:
-                                    if response_type == 'final_turn':
-                                        warning_msg = (f"Please provide a shorter, more focused answer that directly states the bug location without excessive explanation.")
-
-                                    else:
-                                        warning_msg = (f"Please be more concise: reduce your thinking/reasoning to only the most essential analysis steps. Skip redundant explanations and focus on the critical path to finding the bug.")
-                                    
                                     prepared_data_point['turns'] = dialog_processor.inject_length_warning(
                                         prepared_data_point['turns'],
-                                        warning_msg
+                                        f"Previous response was too long ({stats['estimated_tokens']} tokens). Maximum allowed: {max_tokens} tokens"
                                     )
                                 
                                 retry_count += 1
                                 continue
                             
+                            # If still too long after retries, truncate if enabled
                             elif not is_acceptable and self.cfg.enable_response_truncation:
                                 LOG.warning(f"Truncating response after {retry_count} retries")
                                 llm_output['generation'] = dialog_processor.truncate_excessive_response(
@@ -443,8 +618,11 @@ class ArtsivGenerationTask(GenerationTask):
                                         llm_output['_full_generation'], max_tokens
                                     )
                         
+                        # Success - break out of retry loop
                         break
                         
+                    # TODO: this is a hack (as not all servers return that),
+                    # but eventually we should support handling errors like this globally for all generations
                     except openai.BadRequestError as e:
                         if 'Please reduce the length of the messages or completion' in str(e) or 'is longer than the model\'s context length' in str(e):
                             LOG.warning(
@@ -454,23 +632,28 @@ class ArtsivGenerationTask(GenerationTask):
                             status = "failed"
                             reason = "context_length_exceeded"
                             break
+                        # For any other BadRequestError, also fail gracefully and store the error
                         LOG.warning(f"Artsiv generation failed with BadRequestError: {e}")
                         status = "failed"
                         reason = f"bad_request_error: {str(e)}"
                         break
 
+                # Check if generation was likely cut off at token limit
                 generated_tokens = llm_output.get('num_generated_tokens', 0)
                 total_generated_tokens += generated_tokens
                 
+                # If we generated exactly the token limit, it's likely we were cut off
                 if generated_tokens == self.cfg.inference.tokens_to_generate:
                     LOG.warning(
                         f"Model generated exactly {generated_tokens} tokens (the configured limit). "
                         f"Response was likely truncated. Consider the response incomplete."
                     )
+                    # Add a flag to track this
                     llm_output['_likely_truncated'] = True
 
                 chat_history.append(llm_output)
                 
+                # Loop detection - check if agent is stuck in a repetitive pattern
                 if LOOP_DETECTION_AVAILABLE and self.cfg.enable_loop_detection and len(chat_history) >= self.cfg.loop_detection_threshold:
                     is_loop, loop_info = detect_repetitive_tool_calls(chat_history, self.cfg.loop_detection_threshold)
                     
@@ -478,8 +661,10 @@ class ArtsivGenerationTask(GenerationTask):
                         LOG.warning(f"Loop detected! Agent has repeated the same tool call {loop_info['total_repetitions']} times")
                         LOG.debug(f"Loop details: {loop_info}")
                         
+                        # Inject intervention to help break the loop
                         data_point['turns'] = inject_loop_intervention(data_point['turns'], loop_info)
                         
+                        # Also add a warning to the generation for visibility
                         loop_warning = {
                             '_loop_detected': True,
                             '_loop_info': loop_info,
@@ -487,25 +672,28 @@ class ArtsivGenerationTask(GenerationTask):
                         }
                         chat_history[-1].update(loop_warning)
                         
+                        # Analyze patterns for debugging
                         pattern_analysis = analyze_loop_patterns(chat_history)
                         LOG.debug(f"Pattern analysis: {pattern_analysis}")
 
                 if self.cfg.remove_thinking:
                     remove_thinking(llm_output, 'generation', self.cfg.thinking_begin, self.cfg.thinking_end)
 
+                # Try to extract response with error handling
                 try:
                     extracted_block = DialogProcessor.extract_response(llm_output['generation'], self.cfg)
                 except Exception as e:
                     LOG.error(f"Error extracting response from LLM output: {e}")
                     LOG.debug(
                         f"LLM output was: {llm_output.get('generation', 'None')[:500]}..."
-                    )
+                    )  # Log first 500 chars
                     status = "failed"
                     reason = f"response_extraction_error: {str(e)}"
                     break
 
                 if not extracted_block:
                     LOG.warning("Model failed to generate a tool use or location. Ending generation.")
+                    # Check if this was due to truncation at token limit
                     if llm_output.get('_likely_truncated', False):
                         status = "failed"
                         reason = "response_truncated_at_token_limit"
@@ -515,20 +703,24 @@ class ArtsivGenerationTask(GenerationTask):
                             f"to complete its response, but a buffer should have been reserved."
                         )
                     else:
+                        # todo (hov): add resampling with different temperature if necessary.
                         status = "failed"
                         reason = "no_tool_or_location_generated"
                     break
 
+                # Safely add assistant response to the current turn
                 try:
                     if data_point['turns'] and len(data_point['turns']) > 0:
                         current_turn = data_point['turns'][-1]
                         if isinstance(current_turn, dict):
+                            # Store raw LLM generation
                             current_turn['assistant'] = llm_output['generation']
                             current_turn['assistant_raw'] = llm_output.get('raw_generation', llm_output['generation'])
                             current_turn['assistant_raw_w_think'] = llm_output.get(
                                 '_full_generation', llm_output['generation']
                             )
 
+                            # Store extracted structured data
                             if extracted_block:
                                 if extracted_block.get("type") == "tool_calls":
                                     current_turn['tool_call'] = extracted_block.get("tool_call", None)
@@ -549,7 +741,6 @@ class ArtsivGenerationTask(GenerationTask):
                     status = "failed"
                     reason = f"turn_update_error: {str(e)}"
                     break
-
                 if extracted_block.get("type") == "tool_calls":
                     if "tool_call" not in extracted_block:
                         LOG.error(f"Missing 'tool_call' in extracted block: {extracted_block}")
@@ -560,12 +751,16 @@ class ArtsivGenerationTask(GenerationTask):
 
                     tool_output_to_store = tool_call_result
 
+                    # CRITICAL FIX: Add tool output to the CURRENT turn, not a new one
+                    # This maintains the association between tool_call and tool_output
                     if data_point['turns'] and len(data_point['turns']) > 0:
                         current_turn = data_point['turns'][-1]
                         if isinstance(current_turn, dict):
                             current_turn['tool_output'] = tool_output_to_store
                             LOG.debug(f"Added tool output to current turn {len(data_point['turns'])-1}")
                             
+                            # Now create a new turn for the next iteration
+                            # The new turn has the tool output as input for the assistant to analyze
                             new_turn = {
                                 "inputs": tool_output_to_store,
                                 "assistant": "",
@@ -604,12 +799,14 @@ class ArtsivGenerationTask(GenerationTask):
                 else:
                     LOG.debug("No turns available to check for assistant field")
 
+                # Check if we've reached the maximum steps without success
                 if cur_step == total_steps - 1 and status is None:
                     status = "failed"
                     reason = "max_steps_exceeded"
                     break
 
             if status is None:
+                # If we exit the loop without setting status, treat as failed
                 status = "failed"
                 if reason is None:
                     reason = "unknown_failure"
@@ -620,11 +817,18 @@ class ArtsivGenerationTask(GenerationTask):
             full_traceback = traceback.format_exc()
             LOG.error(f"Full traceback:\n{full_traceback}")
 
+            # Debug the state when error occurs
+            LOG.error("=== DEBUG STATE AT ERROR ===")
+            LOG.error(f"Error type: {type(e).__name__}")
+            LOG.error(f"Error message: {str(e)}")
+
+            # Also print for immediate visibility
             print(f"\n{'='*60}")
             print(f"ERROR in process_single_datapoint: {e}")
             print(f"Error type: {type(e).__name__}")
             print(f"Full traceback:\n{full_traceback}")
 
+            # Check data_point structure
             if isinstance(data_point, dict):
                 LOG.error(f"data_point keys: {list(data_point.keys())}")
                 print(f"data_point keys: {list(data_point.keys())}")
@@ -633,7 +837,7 @@ class ArtsivGenerationTask(GenerationTask):
                     LOG.error(f"Number of turns: {len(data_point['turns'])}")
                     print(f"Number of turns: {len(data_point['turns'])}")
 
-                    for i, turn in enumerate(data_point['turns'][:5]):
+                    for i, turn in enumerate(data_point['turns'][:5]):  # Show first 5 turns
                         if isinstance(turn, dict):
                             LOG.error(f"Turn {i} keys: {list(turn.keys())}")
                             LOG.error(f"Turn {i} has 'assistant': {'assistant' in turn}")
@@ -658,13 +862,16 @@ class ArtsivGenerationTask(GenerationTask):
             status = "failed"
             reason = f"exception: {str(e)}"
 
+        # Ensure turns is always properly structured even in error cases
         if 'turns' not in data_point:
             LOG.warning("Missing 'turns' in data_point at return time, initializing empty structure")
             data_point['turns'] = []
 
+        # Final validation and repair of turn structure
         for i, turn in enumerate(data_point.get('turns', [])):
             if not isinstance(turn, dict):
                 LOG.error(f"Turn {i} is not a dictionary: {type(turn)}")
+                # Convert to proper structure
                 data_point['turns'][i] = {
                     "inputs": str(turn) if turn else "",
                     "assistant": "",
@@ -672,6 +879,7 @@ class ArtsivGenerationTask(GenerationTask):
                     "tool_output": "",
                 }
             else:
+                # Ensure all required fields exist with proper defaults
                 if 'inputs' not in turn:
                     turn['inputs'] = ''
                 if 'assistant' not in turn:
@@ -685,12 +893,25 @@ class ArtsivGenerationTask(GenerationTask):
                     f"Final turn {i} validation - has assistant: {'assistant' in turn}, keys: {list(turn.keys())}"
                 )
 
+        # generation is a dict["problem_id.subtask_step": full_solution] here
+        # """
+        # [
+        #     User: Problem statement,
+        #     Assistant: {"generation": generation with reasoning trace, "tool_call": … },
+        #     User: {"tool_output": ""},
+        #     Assistant: {"generation": … "location": …}
+        # ]
+        # """
+
+        # Debug log the turns structure before returning
         if 'turns' in data_point:
             LOG.debug(f"Returning {len(data_point['turns'])} turns")
 
+        # Get the pre-calculated ground truth percentage and missing files
         ground_truth_in_repo_percentage = data_point.get('_ground_truth_in_repo_percentage', 0.0)
         missing_ground_truth_files = data_point.get('_missing_ground_truth_files', [])
 
+        # Clean up temporary variables from data_point
         data_point.pop('_ground_truth_in_repo_percentage', None)
         data_point.pop('_missing_ground_truth_files', None)
 
@@ -700,14 +921,16 @@ class ArtsivGenerationTask(GenerationTask):
             'num_turns': len(chat_history),
             'status': status,
             'reason': reason,
-            'turns': data_point.get('turns', []),
-            'ground_truth_in_repo_percentage': ground_truth_in_repo_percentage,
-            'missing_ground_truth_files': missing_ground_truth_files,
+            'turns': data_point.get('turns', []),  # Include the turns
+            'ground_truth_in_repo_percentage': ground_truth_in_repo_percentage,  # Percentage of ground truth files that exist in repo
+            'missing_ground_truth_files': missing_ground_truth_files,  # Details about which GT files are missing and why
         }
 
 
 GENERATION_TASK_CLASS = ArtsivGenerationTask
 
+
+# Update the hydra main to use the class method
 @hydra.main(version_base=None, config_name='base_artsiv_generation_config')
 def artsiv_generation(cfg: ArtsivGenerationConfig):
     cfg = ArtsivGenerationConfig(_init_nested=True, **cfg)

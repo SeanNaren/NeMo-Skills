@@ -1353,31 +1353,37 @@ class DialogProcessor:
 # Response Length Management Functions
 # (Moved from response_length_management.py for better organization)
 
+# Default token limits for different response types
+DEFAULT_MAX_RESPONSE_TOKENS = {
+    'normal': 8192,  # Regular response with tool calls
+    'thinking': 16384,  # Response with thinking tags (allows more)
+    'final_turn': 4096,  # Final turn should be concise
+    'retry': 2048,  # Strict limit for retries after length failures
+}
+
+# Warning thresholds (percentage of max)
+WARNING_THRESHOLD = 0.75
+CRITICAL_THRESHOLD = 0.9
+
 
 def check_response_length(
     response: str,
     response_type: str = 'normal',
-    max_tokens: int = None,
-    warning_threshold: float = 0.75,
-    critical_threshold: float = 0.9
+    custom_max_tokens: Optional[int] = None
 ) -> tuple[bool, str, Dict]:
     """
     Check if a response is within acceptable length limits.
     
     Args:
         response: The generated response text
-        response_type: Type of response ('normal', 'thinking', 'final_turn')
-        max_tokens: Maximum tokens allowed
-        warning_threshold: Threshold percentage for warning (default 0.75)
-        critical_threshold: Threshold percentage for critical warning (default 0.9)
+        response_type: Type of response ('normal', 'thinking', 'final_turn', 'retry')
+        custom_max_tokens: Override the default max tokens for this type
         
     Returns:
         Tuple of (is_acceptable, warning_message, stats)
     """
-    if max_tokens is None:
-        raise ValueError("max_tokens must be provided to check_response_length")
-    
     estimated_tokens = estimate_tokens(response)
+    max_tokens = custom_max_tokens or DEFAULT_MAX_RESPONSE_TOKENS.get(response_type, DEFAULT_MAX_RESPONSE_TOKENS['normal'])
     
     stats = {
         'estimated_tokens': estimated_tokens,
@@ -1389,10 +1395,10 @@ def check_response_length(
     if estimated_tokens > max_tokens:
         warning = f"Response exceeds token limit: {estimated_tokens} > {max_tokens} ({stats['percentage']:.1f}%)"
         return False, warning, stats
-    elif estimated_tokens > max_tokens * critical_threshold:
+    elif estimated_tokens > max_tokens * CRITICAL_THRESHOLD:
         warning = f"Response approaching token limit: {estimated_tokens}/{max_tokens} ({stats['percentage']:.1f}%)"
         return True, warning, stats
-    elif estimated_tokens > max_tokens * warning_threshold:
+    elif estimated_tokens > max_tokens * WARNING_THRESHOLD:
         warning = f"Response length warning: {estimated_tokens}/{max_tokens} ({stats['percentage']:.1f}%)"
         return True, warning, stats
     else:
@@ -1465,7 +1471,7 @@ def inject_length_warning(turns: List[Dict], warning_message: str) -> List[Dict]
         Updated turns with warning
     """
     warning_turn = {
-        "inputs": f"[SYSTEM WARNING: {warning_message}]",
+        "inputs": f"[SYSTEM WARNING: {warning_message}. Please provide a more concise response focusing only on the essential information needed to locate the bug.]",
         "assistant": "",
         "tool_call": None,
         "tool_output": "",
@@ -1478,8 +1484,7 @@ def calculate_safe_token_limit(
     current_context_tokens: int,
     max_context_length: int,
     safety_margin: float = 0.9,
-    min_generation_tokens: int = 1024,
-    max_generation_tokens: Optional[int] = None
+    min_generation_tokens: int = 1024
 ) -> int:
     """
     Calculate a safe token limit for the next generation.
@@ -1489,7 +1494,6 @@ def calculate_safe_token_limit(
         max_context_length: Maximum context length
         safety_margin: Safety margin (0.9 = use only 90% of max)
         min_generation_tokens: Minimum tokens to allow for generation
-        max_generation_tokens: Maximum tokens to allow for generation (optional cap)
         
     Returns:
         Safe token limit for next generation
@@ -1502,11 +1506,8 @@ def calculate_safe_token_limit(
         LOG.warning(f"Very limited generation space: {available} tokens available")
         return min_generation_tokens
     
-    # Apply max cap if provided
-    if max_generation_tokens is not None:
-        return min(available, max_generation_tokens)
-    
-    return available
+    # Use a conservative limit to prevent overflow
+    return min(available, DEFAULT_MAX_RESPONSE_TOKENS['normal'])
 
 
 def analyze_response_failure(

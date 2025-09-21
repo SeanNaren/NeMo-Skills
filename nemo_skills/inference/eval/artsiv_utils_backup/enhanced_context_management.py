@@ -119,7 +119,7 @@ def count_dialogue_tokens(turns: List[Dict], token_counter: Optional[TokenCounte
             continue
             
         # Count all text fields in the turn
-        for field in ['inputs', 'tool_output', 'assistant_raw_w_think']:
+        for field in ['inputs', 'assistant', 'tool_output', 'assistant_raw', 'assistant_raw_w_think']:
             if field in turn and turn[field]:
                 content = str(turn[field])
                 tokens = token_counter.count_tokens(content)
