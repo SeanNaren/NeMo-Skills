@@ -50,6 +50,11 @@ class IOIMetrics(BaseMetrics):
                 subtask_scores[subtask] = max(subtask_scores[subtask], result["score"])
         return sum(subtask_scores.values()), subtask_scores
 
+    def update_common_metrics(self, agg_dict):
+        """Override to exclude num_entries but keep other common metrics."""
+        super().update_common_metrics(agg_dict)
+        agg_dict.pop("num_entries")
+
     def get_metrics(self):
         total_score = 0.0
         total_submissions = 0
