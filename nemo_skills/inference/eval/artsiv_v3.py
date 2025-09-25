@@ -45,7 +45,7 @@ LOG = logging.getLogger(get_logger_name(__file__))
 class ArtsivGenerationConfig(GenerateSolutionsConfig):
     inference: InferenceConfig = field(
         default_factory=lambda: InferenceConfig(
-            temperature=0.99,
+            temperature=0.7,
             top_k=0,
             top_p=0.95,
             min_p=0.0,

@@ -15,11 +15,10 @@
 import json
 import logging
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import field
-from typing import List, Dict, Tuple, Set
+import numpy as np
+from typing import List, Dict
 
-from nemo_skills.code_execution.sandbox import get_sandbox
-from nemo_skills.inference.eval.artsiv_utils.utils import extract_locations_from_patch
+from nemo_skills.inference.eval.artsiv_utils.patch_processor import PatchProcessor
 from nemo_skills.utils import get_logger_name, nested_dataclass, unroll_files
 
 LOG = logging.getLogger(get_logger_name(__file__))
@@ -524,7 +523,7 @@ def eval_metrics(eval_config, artsiv_data):
         if elem["status"] == "skipped":
             skipped_samples += 1
             # Assign zero metrics to skipped samples
-            ground_truth_locations = extract_locations_from_patch(elem["patch"])
+            ground_truth_locations = PatchProcessor.extract_locations_from_patch(elem["patch"])
             skip_metrics = {
                 "file_level": {"precision": 0.0, "recall": 0.0, "f1": 0.0, "exact_match": 0.0, "accuracy": 0.0},
                 "chunk_containment": {
@@ -555,7 +554,7 @@ def eval_metrics(eval_config, artsiv_data):
         elif elem["status"] != "success":
             failed_samples += 1
             # Assign zero metrics to failed samples
-            ground_truth_locations = extract_locations_from_patch(elem["patch"])
+            ground_truth_locations = PatchProcessor.extract_locations_from_patch(elem["patch"])
             zero_metrics = {
                 "file_level": {"precision": 0.0, "recall": 0.0, "f1": 0.0, "exact_match": 0.0, "accuracy": 0.0},
                 "chunk_containment": {
@@ -584,7 +583,7 @@ def eval_metrics(eval_config, artsiv_data):
             status_lists[elem_idx].append(zero_metrics)
             continue
         successful_samples += 1
-        ground_truth_locations = extract_locations_from_patch(elem["patch"])
+        ground_truth_locations = PatchProcessor.extract_locations_from_patch(elem["patch"])
         tasks.append((eval_config, elem_idx, ground_truth_locations, elem["locations"]))
         # for step_id, full_generation in elem['generation'].items():
         #     instance_id, subtask_step = step_id.split('.')
@@ -594,7 +593,6 @@ def eval_metrics(eval_config, artsiv_data):
     # Calculate ground truth presence statistics
     ground_truth_stats = {}
     if ground_truth_percentages:
-        import numpy as np
         gt_array = np.array(ground_truth_percentages)
         ground_truth_stats = {
             "mean_percentage": float(np.mean(gt_array)),

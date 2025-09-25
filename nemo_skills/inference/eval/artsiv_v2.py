@@ -45,7 +45,7 @@ LOG = logging.getLogger(get_logger_name(__file__))
 class ArtsivGenerationConfig(GenerateSolutionsConfig):
     inference: InferenceConfig = field(
         default_factory=lambda: InferenceConfig(
-            temperature=0.99,
+            temperature=0.7,
             top_k=0,
             top_p=0.95,
             min_p=0.0,
@@ -307,7 +307,6 @@ class ArtsivGenerationTask(GenerationTask):
                         "assistant": "", 
                         "tool_call": None, 
                         "tool_output": "",
-                        "_retry_count": 0,
                     }
         else:
             data_point['turns'] = [{
@@ -316,7 +315,6 @@ class ArtsivGenerationTask(GenerationTask):
                 "assistant": "", 
                 "tool_call": None, 
                 "tool_output": "",
-                "_retry_count": 0,
             }]
 
         try:
@@ -353,7 +351,6 @@ class ArtsivGenerationTask(GenerationTask):
             data_point['turns'][0]['turn_id'] = 0  # Ensure turn_id is set
             # Estimate tokens for initial problem statement (rough estimate)
             data_point['turns'][0]['_input_tokens'] = len(inputs) // 4
-            data_point['turns'][0]['_retry_count'] = 0  # Initial turn has no retries
             log_debug(f"Initialized turns with problem statement, turn count: {len(data_point['turns'])}", indent=4)
 
         except Exception as e:
@@ -521,14 +518,11 @@ class ArtsivGenerationTask(GenerationTask):
                             max_tokens = self.cfg.inference.tokens_to_generate
 
                             # Check if response is acceptable based on actual token count
-                            # If response uses exactly max_tokens, it's likely truncated
-                            is_acceptable = actual_generated_tokens < max_tokens
+                            is_acceptable = actual_generated_tokens <= max_tokens
                             warning_msg = ""
 
                             if actual_generated_tokens > max_tokens:
                                 warning_msg = f"Response exceeds token limit: {actual_generated_tokens} > {max_tokens}"
-                            elif actual_generated_tokens >= max_tokens:
-                                warning_msg = f"Response at token limit: {actual_generated_tokens} = {max_tokens} (likely truncated)"
                             elif actual_generated_tokens > max_tokens * self.cfg.response_critical_threshold:
                                 warning_msg = f"Response approaching token limit: {actual_generated_tokens}/{max_tokens} ({(actual_generated_tokens/max_tokens)*100:.1f}%)"
                             elif actual_generated_tokens > max_tokens * self.cfg.response_warning_threshold:
@@ -600,9 +594,9 @@ class ArtsivGenerationTask(GenerationTask):
                 # Use the actual_generated_tokens we already retrieved
                 total_generated_tokens += actual_generated_tokens
 
-                if actual_generated_tokens >= self.cfg.inference.tokens_to_generate:
+                if actual_generated_tokens == self.cfg.inference.tokens_to_generate:
                     log_warning(
-                        f"Model generated {actual_generated_tokens} tokens (configured limit: {self.cfg.inference.tokens_to_generate}). "
+                        f"Model generated exactly {actual_generated_tokens} tokens (the configured limit). "
                         f"Response was likely truncated. Consider the response incomplete.",
                         indent=8
                     )
@@ -671,7 +665,6 @@ class ArtsivGenerationTask(GenerationTask):
                             )
                             current_turn['_llm_tokens'] = actual_generated_tokens  # Store actual LLM token count
                             current_turn['_context_turn_ids'] = context_turn_ids  # Store which turns were in context
-                            current_turn['_retry_count'] = retry_count  # Track number of retries for this turn
 
                             if extracted_block:
                                 if extracted_block.get("type") == "tool_calls":
@@ -731,7 +724,6 @@ class ArtsivGenerationTask(GenerationTask):
                                 "assistant": "",
                                 "tool_call": None,
                                 "tool_output": "",
-                                "_retry_count": 0,  # New turns start with 0 retries
                             }
                             data_point['turns'].append(new_turn)
                             log_debug(f"Added new turn for next iteration, total turns: {len(data_point['turns'])}, turn_id: {new_turn['turn_id']}", indent=16)
@@ -840,7 +832,6 @@ class ArtsivGenerationTask(GenerationTask):
                     "assistant": "",
                     "tool_call": None,
                     "tool_output": "",
-                    "_retry_count": 0,
                 }
             else:
                 if 'inputs' not in turn:

@@ -45,7 +45,7 @@ LOG = logging.getLogger(get_logger_name(__file__))
 class ArtsivGenerationConfig(GenerateSolutionsConfig):
     inference: InferenceConfig = field(
         default_factory=lambda: InferenceConfig(
-            temperature=0.99,
+            temperature=0.7,
             top_k=0,
             top_p=0.95,
             min_p=0.0,
@@ -290,7 +290,6 @@ class ArtsivGenerationTask(GenerationTask):
         if 'turns' in data_point and isinstance(data_point['turns'], list) and len(data_point['turns']) > 0:
             for i, turn in enumerate(data_point['turns']):
                 if isinstance(turn, dict):
-                    turn.setdefault('turn_id', i)  # Add turn_id
                     turn.setdefault('inputs', '')
                     turn.setdefault('assistant', '')
                     turn.setdefault('tool_call', None)
@@ -301,23 +300,9 @@ class ArtsivGenerationTask(GenerationTask):
                     )
                 else:
                     log_warning(f"Found non-dict turn at index {i}: {type(turn)}, replacing with empty structure", indent=4)
-                    data_point['turns'][i] = {
-                        "turn_id": i,
-                        "inputs": "", 
-                        "assistant": "", 
-                        "tool_call": None, 
-                        "tool_output": "",
-                        "_retry_count": 0,
-                    }
+                    data_point['turns'][i] = {"inputs": "", "assistant": "", "tool_call": None, "tool_output": ""}
         else:
-            data_point['turns'] = [{
-                "turn_id": 0,
-                "inputs": "", 
-                "assistant": "", 
-                "tool_call": None, 
-                "tool_output": "",
-                "_retry_count": 0,
-            }]
+            data_point['turns'] = [{"inputs": "", "assistant": "", "tool_call": None, "tool_output": ""}]
 
         try:
             instance_filepath = Path(self.cfg.mount_directory).joinpath(f"{data_point['instance_id']}.pkl")
@@ -350,10 +335,8 @@ class ArtsivGenerationTask(GenerationTask):
 """
 
             data_point['turns'][0]['inputs'] = inputs
-            data_point['turns'][0]['turn_id'] = 0  # Ensure turn_id is set
             # Estimate tokens for initial problem statement (rough estimate)
             data_point['turns'][0]['_input_tokens'] = len(inputs) // 4
-            data_point['turns'][0]['_retry_count'] = 0  # Initial turn has no retries
             log_debug(f"Initialized turns with problem statement, turn count: {len(data_point['turns'])}", indent=4)
 
         except Exception as e:
@@ -419,10 +402,6 @@ class ArtsivGenerationTask(GenerationTask):
                         log_info(f"Truncation stats: {truncation_stats}", indent=12)
 
                 prepared_data_point = copy.deepcopy(data_point)
-                
-                # Track which turns are included in the context for this generation
-                context_turn_ids = [turn.get('turn_id', i) for i, turn in enumerate(prepared_data_point['turns'])]
-                log_debug(f"Context includes turn IDs: {context_turn_ids}", indent=8)
 
                 if self.cfg.enable_loop_detection and len(chat_history) >= self.cfg.loop_detection_threshold - 1:
                     is_loop, loop_info = ContextManager.detect_repetitive_tool_calls(
@@ -437,12 +416,6 @@ class ArtsivGenerationTask(GenerationTask):
                         prepared_data_point['turns'] = ContextManager.inject_loop_intervention(
                             prepared_data_point['turns'], loop_info
                         )
-                        # Sync back to original data_point to persist the intervention
-                        data_point['turns'] = copy.deepcopy(prepared_data_point['turns'])
-                        # Update turn_ids for any new turns
-                        for i, turn in enumerate(data_point['turns']):
-                            turn['turn_id'] = i
-                        log_debug(f"Added loop intervention as turn {len(data_point['turns'])-1}", indent=12)
 
                 if getattr(self.cfg, 'enable_enhanced_context', True):
                     will_fit, error_msg, context_stats = ContextManager.check_context_before_generation(prepared_data_point, self.cfg)
@@ -463,22 +436,6 @@ class ArtsivGenerationTask(GenerationTask):
                     prepared_data_point['turns'] = ContextManager.inject_final_turn_instruction(
                         prepared_data_point['turns'], is_final_turn=True
                     )
-                    # Sync back to original data_point to persist the final turn instruction
-                    # Check if the instruction was added to an existing turn or as a new turn
-                    if len(prepared_data_point['turns']) > len(data_point['turns']):
-                        # New turn was added
-                        data_point['turns'] = copy.deepcopy(prepared_data_point['turns'])
-                        # Update turn_ids for any new turns
-                        for i, turn in enumerate(data_point['turns']):
-                            turn['turn_id'] = i
-                        log_debug(f"Added final turn instruction as new turn {len(data_point['turns'])-1}", indent=8)
-                    else:
-                        # Instruction was appended to existing turn
-                        data_point['turns'] = copy.deepcopy(prepared_data_point['turns'])
-                        log_debug(f"Appended final turn instruction to existing turn", indent=8)
-                    # Update context_turn_ids to include any modified turns
-                    context_turn_ids = [turn.get('turn_id', i) for i, turn in enumerate(prepared_data_point['turns'])]
-                    log_debug(f"Updated context after final turn instruction: {context_turn_ids}", indent=8)
 
                 response_type = 'normal'
                 if cur_step == total_steps - 1:
@@ -506,9 +463,6 @@ class ArtsivGenerationTask(GenerationTask):
                         )
 
                         llm_output = await super().process_single_datapoint(prepared_data_point, all_data)
-                        
-                        # Store context information in the output
-                        llm_output['_context_turn_ids'] = context_turn_ids
 
                         # Get the actual number of generated tokens
                         actual_generated_tokens = llm_output.get('num_generated_tokens', 0)
@@ -521,14 +475,11 @@ class ArtsivGenerationTask(GenerationTask):
                             max_tokens = self.cfg.inference.tokens_to_generate
 
                             # Check if response is acceptable based on actual token count
-                            # If response uses exactly max_tokens, it's likely truncated
-                            is_acceptable = actual_generated_tokens < max_tokens
+                            is_acceptable = actual_generated_tokens <= max_tokens
                             warning_msg = ""
 
                             if actual_generated_tokens > max_tokens:
                                 warning_msg = f"Response exceeds token limit: {actual_generated_tokens} > {max_tokens}"
-                            elif actual_generated_tokens >= max_tokens:
-                                warning_msg = f"Response at token limit: {actual_generated_tokens} = {max_tokens} (likely truncated)"
                             elif actual_generated_tokens > max_tokens * self.cfg.response_critical_threshold:
                                 warning_msg = f"Response approaching token limit: {actual_generated_tokens}/{max_tokens} ({(actual_generated_tokens/max_tokens)*100:.1f}%)"
                             elif actual_generated_tokens > max_tokens * self.cfg.response_warning_threshold:
@@ -566,14 +517,6 @@ class ArtsivGenerationTask(GenerationTask):
                                     prepared_data_point['turns'] = ContextManager.inject_length_warning(
                                         prepared_data_point['turns'], warning_msg
                                     )
-                                    # Sync back to original data_point to persist the warning
-                                    data_point['turns'] = copy.deepcopy(prepared_data_point['turns'])
-                                    # Update turn_ids for any new turns
-                                    for i, turn in enumerate(data_point['turns']):
-                                        turn['turn_id'] = i
-                                    # Update context_turn_ids to include the new warning turn
-                                    context_turn_ids = [turn.get('turn_id', i) for i, turn in enumerate(prepared_data_point['turns'])]
-                                    log_debug(f"Added length warning as turn {len(data_point['turns'])-1}", indent=20)
 
                                 retry_count += 1
                                 continue
@@ -600,9 +543,9 @@ class ArtsivGenerationTask(GenerationTask):
                 # Use the actual_generated_tokens we already retrieved
                 total_generated_tokens += actual_generated_tokens
 
-                if actual_generated_tokens >= self.cfg.inference.tokens_to_generate:
+                if actual_generated_tokens == self.cfg.inference.tokens_to_generate:
                     log_warning(
-                        f"Model generated {actual_generated_tokens} tokens (configured limit: {self.cfg.inference.tokens_to_generate}). "
+                        f"Model generated exactly {actual_generated_tokens} tokens (the configured limit). "
                         f"Response was likely truncated. Consider the response incomplete.",
                         indent=8
                     )
@@ -621,10 +564,6 @@ class ArtsivGenerationTask(GenerationTask):
                         log_debug(f"Loop details: {loop_info}", indent=12)
 
                         data_point['turns'] = ContextManager.inject_loop_intervention(data_point['turns'], loop_info)
-                        # Update turn_ids for any new turns
-                        for i, turn in enumerate(data_point['turns']):
-                            turn['turn_id'] = i
-                        log_debug(f"Added post-generation loop intervention as turn {len(data_point['turns'])-1}", indent=12)
 
                         loop_warning = {'_loop_detected': True, '_loop_info': loop_info, '_intervention_added': True}
                         chat_history[-1].update(loop_warning)
@@ -670,8 +609,6 @@ class ArtsivGenerationTask(GenerationTask):
                                 '_full_generation', llm_output['generation']
                             )
                             current_turn['_llm_tokens'] = actual_generated_tokens  # Store actual LLM token count
-                            current_turn['_context_turn_ids'] = context_turn_ids  # Store which turns were in context
-                            current_turn['_retry_count'] = retry_count  # Track number of retries for this turn
 
                             if extracted_block:
                                 if extracted_block.get("type") == "tool_calls":
@@ -726,15 +663,13 @@ class ArtsivGenerationTask(GenerationTask):
                             log_debug(f"Added tool output to current turn {len(data_point['turns'])-1}", indent=16)
 
                             new_turn = {
-                                "turn_id": len(data_point['turns']),
                                 "inputs": tool_output_to_store,
                                 "assistant": "",
                                 "tool_call": None,
                                 "tool_output": "",
-                                "_retry_count": 0,  # New turns start with 0 retries
                             }
                             data_point['turns'].append(new_turn)
-                            log_debug(f"Added new turn for next iteration, total turns: {len(data_point['turns'])}, turn_id: {new_turn['turn_id']}", indent=16)
+                            log_debug(f"Added new turn for next iteration, total turns: {len(data_point['turns'])}", indent=16)
                         else:
                             log_error(f"Current turn is not a dict: {type(current_turn)}", indent=16)
                             status = "failed"
@@ -835,12 +770,10 @@ class ArtsivGenerationTask(GenerationTask):
             if not isinstance(turn, dict):
                 log_error(f"Turn {i} is not a dictionary: {type(turn)}", indent=4)
                 data_point['turns'][i] = {
-                    "turn_id": i,
                     "inputs": str(turn) if turn else "",
                     "assistant": "",
                     "tool_call": None,
                     "tool_output": "",
-                    "_retry_count": 0,
                 }
             else:
                 if 'inputs' not in turn:
@@ -851,8 +784,6 @@ class ArtsivGenerationTask(GenerationTask):
                     turn['tool_call'] = None
                 if 'tool_output' not in turn:
                     turn['tool_output'] = ''
-                if 'turn_id' not in turn:
-                    turn['turn_id'] = i
 
                 log_debug(
                     f"Final turn {i} validation - has assistant: {'assistant' in turn}, keys: {list(turn.keys())}",

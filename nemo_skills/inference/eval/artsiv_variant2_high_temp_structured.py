@@ -29,9 +29,8 @@ from pathlib import Path
 import hydra
 
 import openai
-from nemo_skills.inference.eval.artsiv_utils.utils import (calculate_ground_truth_percentage,
-                                                             extract_locations_from_patch, filter_repo_dict,
-                                                             tree_repo_dict)
+from nemo_skills.inference.eval.artsiv_utils.repo_manager import RepoManager
+from nemo_skills.inference.eval.artsiv_utils.patch_processor import PatchProcessor
 from nemo_skills.inference.generate import GenerateSolutionsConfig, GenerationTask, InferenceConfig
 from nemo_skills.inference.model import server_params
 from nemo_skills.utils import get_help_message, get_logger_name, nested_dataclass, remove_thinking, setup_logging
@@ -255,14 +254,14 @@ class ArtsivGenerationTask(GenerationTask):
 
             with open(instance_filepath, 'rb') as f:
                 repo_dict = pickle.load(f)
-            repo_dict = filter_repo_dict(repo_dict, self.cfg.exclude_dirs, self.cfg.file_extensions)
-            tree_structure = tree_repo_dict(repo_dict, self.cfg.show_line_counts)
+            repo_dict = RepoManager.filter_repo_dict(repo_dict, self.cfg.exclude_dirs, self.cfg.file_extensions)
+            tree_structure = RepoManager.tree_repo_dict(repo_dict, self.cfg.show_line_counts)
 
             ground_truth_in_repo_percentage = 0.0
             if 'patch' in data_point and data_point['patch']:
                 try:
-                    locations = extract_locations_from_patch(data_point['patch'])
-                    ground_truth_in_repo_percentage, debug_info = calculate_ground_truth_percentage(
+                    locations = PatchProcessor.extract_locations_from_patch(data_point['patch'])
+                    ground_truth_in_repo_percentage, debug_info = RepoManager.calculate_ground_truth_percentage(
                         repo_dict, locations, self.cfg.exclude_dirs, self.cfg.file_extensions
                     )
                     LOG.debug(f"Ground truth check debug info: {debug_info}")
