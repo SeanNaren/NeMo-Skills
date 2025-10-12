@@ -558,7 +558,7 @@ class ArtsivGenerationTask(GenerationTask):
 
                                 if self.cfg.inject_length_warnings:
                                     if response_type == 'final_turn':
-                                        warning_msg = f"Please provide a shorter, more focused answer that directly states the bug location without excessive explanation."
+                                        warning_msg = f"Please provide a shorter, more focused answer with concise findings and locations. Include only the most essential bullet points in <findings> without excessive explanation, and directly state the bug locations in <locations>."
 
                                     else:
                                         warning_msg = f"Please be more concise: reduce your thinking/reasoning to only the most essential analysis steps. Skip redundant explanations and focus on the critical path to finding the bug."
