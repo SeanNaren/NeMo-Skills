@@ -21,7 +21,48 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 from matplotlib.patches import Rectangle
 import warnings
+from datetime import datetime
 warnings.filterwarnings('ignore')
+
+# --- Robust Inter SemiBold setup ---------------------------------------------
+import os
+import matplotlib
+import matplotlib.font_manager as fm
+import logging
+
+def force_bold_font():
+    """
+    Use a reliable font that works well with bold weights.
+    Priority: Arial > Helvetica > system sans-serif
+    """
+    logging.getLogger('matplotlib.font_manager').setLevel(logging.ERROR)
+
+    # Use reliable system fonts that have proper bold variants
+    matplotlib.rcParams['font.family'] = ['Arial', 'Helvetica', 'DejaVu Sans', 'sans-serif']
+    matplotlib.rcParams['font.weight'] = 'bold'
+    matplotlib.rcParams['axes.unicode_minus'] = False
+    
+    # Force bold rendering with additional settings
+    matplotlib.rcParams['axes.labelweight'] = 'bold'
+    matplotlib.rcParams['axes.titleweight'] = 'bold'
+    matplotlib.rcParams['figure.titleweight'] = 'bold'
+
+    # Log what Matplotlib will actually draw with
+    try:
+        font_family = matplotlib.rcParams['font.family']
+        # Handle case where font.family might be a list
+        if isinstance(font_family, list):
+            font_family = font_family[0] if font_family else 'Arial'
+        
+        final_path = fm.findfont(font_family, fontext='ttf', fallback_to_default=True)
+        print(f"[Font] Using: {font_family}  "
+              f"(weight={matplotlib.rcParams['font.weight']})")
+        print(f"[Font] Resolved file: {final_path}")
+    except Exception as e:
+        print(f"[Font] Could not resolve final font path: {e}")
+
+force_bold_font()
+# -----------------------------------------------------------------------------
 
 # Set up logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -31,12 +72,78 @@ LOG = logging.getLogger(__name__)
 plt.style.use('seaborn-v0_8-whitegrid')
 sns.set_palette("husl")
 
+# Global typography (all bold with reliable fonts - larger sizes)
+plt.rcParams['font.size'] = 12
+plt.rcParams['axes.titlesize'] = 20
+plt.rcParams['axes.labelsize'] = 18
+plt.rcParams['xtick.labelsize'] = 12
+plt.rcParams['ytick.labelsize'] = 12
+plt.rcParams['legend.fontsize'] = 12
+plt.rcParams['axes.labelweight'] = 'bold'
+plt.rcParams['axes.titleweight'] = 'bold'
+plt.rcParams['font.sans-serif'] = ['Arial', 'Helvetica', 'DejaVu Sans', 'sans-serif']
+plt.rcParams['font.serif'] = ['Arial', 'Helvetica', 'DejaVu Sans', 'sans-serif']
+
+def check_available_inter_fonts():
+    """Check what Inter fonts are available on the system"""
+    import matplotlib.font_manager as fm
+    import os
+    
+    print("Checking for available Inter fonts...")
+    
+    # Check system fonts
+    all_fonts = [f.name for f in fm.fontManager.ttflist]
+    inter_fonts = [f for f in all_fonts if 'Inter' in f]
+    
+    if inter_fonts:
+        print("Available Inter fonts:")
+        for font in sorted(inter_fonts):
+            print(f"  - {font}")
+    else:
+        print("No Inter fonts found in system fonts")
+    
+    # Check common font file paths
+    inter_paths = [
+        '/System/Library/Fonts/Inter.ttc',
+        '/Library/Fonts/Inter.ttc',
+        '/System/Library/Fonts/Inter-Medium.ttf',
+        '/Library/Fonts/Inter-Medium.ttf',
+        '/System/Library/Fonts/Inter-SemiBold.ttf',
+        '/Library/Fonts/Inter-SemiBold.ttf',
+        '/System/Library/Fonts/Inter-Bold.ttf',
+        '/Library/Fonts/Inter-Bold.ttf',
+        os.path.expanduser('~/Library/Fonts/Inter.ttc'),
+        os.path.expanduser('~/Library/Fonts/Inter-Medium.ttf'),
+        os.path.expanduser('~/Library/Fonts/Inter-SemiBold.ttf'),
+        os.path.expanduser('~/Library/Fonts/Inter-Bold.ttf'),
+    ]
+    
+    print("\nChecking font file paths...")
+    found_paths = []
+    for path in inter_paths:
+        if os.path.exists(path):
+            found_paths.append(path)
+            print(f"  Found: {path}")
+    
+    if not found_paths:
+        print("  No Inter font files found in common locations")
+    
+    return inter_fonts, found_paths
+
+# (Old set_bold_inter_font removed; using the new global setup instead)
+
+# Define unified color palette
+CUSTOM_PALETTE = ['#B6E325', '#76BA1D', '#4C9A29', '#4C785B']
+DEFAULT_COLOR = '#76BA1D'
+
 class TrajectoryAnalyzer:
     """Analyzes Artsiv conversation trajectories and generates visualizations."""
     
     def __init__(self, input_file: str, output_dir: str):
         self.input_file = Path(input_file)
-        self.output_dir = Path(output_dir)
+        # Add timestamp to output directory
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        self.output_dir = Path(f"{output_dir}_{timestamp}")
         self.output_dir.mkdir(parents=True, exist_ok=True)
         
         self.data = []
@@ -220,50 +327,41 @@ class TrajectoryAnalyzer:
         
         return self.stats
     
+    def _bold_ticks_bold(self, ax):
+        # Make tick labels bold with string weight
+        for label in ax.get_xticklabels():
+            label.set_fontweight('bold')
+        for label in ax.get_yticklabels():
+            label.set_fontweight('bold')
+
     def plot_turn_distribution(self):
         """Plot distribution of turns per trajectory."""
-        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 6))
+        fig, ax1 = plt.subplots(1, 1, figsize=(8, 5))
         
         # Histogram with KDE
         turns_data = self.stats['turns']['distribution']
         
-        ax1.hist(turns_data, bins=20, alpha=0.7, density=True, color='skyblue', edgecolor='black')
+        ax1.hist(turns_data, bins=20, alpha=0.7, density=True, color=DEFAULT_COLOR, edgecolor='black')
         
         # Add KDE if we have enough data
         if len(turns_data) > 1:
             from scipy.stats import gaussian_kde
             kde = gaussian_kde(turns_data)
             x_range = np.linspace(min(turns_data), max(turns_data), 100)
-            ax1.plot(x_range, kde(x_range), 'r-', linewidth=2, label='KDE')
+            ax1.plot(x_range, kde(x_range), color='#4C785B', linewidth=2, label='KDE')
         
-        ax1.axvline(self.stats['turns']['mean'], color='red', linestyle='--', 
+        ax1.axvline(self.stats['turns']['mean'], color='#4C785B', linestyle='--', 
                    label=f"Mean: {self.stats['turns']['mean']:.1f}")
-        ax1.axvline(self.stats['turns']['median'], color='green', linestyle='--', 
+        ax1.axvline(self.stats['turns']['median'], color='#4C785B', linestyle='-.', 
                    label=f"Median: {self.stats['turns']['median']:.1f}")
         
-        ax1.set_xlabel('Number of Turns', fontsize=12)
-        ax1.set_ylabel('Density', fontsize=12)
-        ax1.set_title('Distribution of Turns per Trajectory', fontsize=14, fontweight='bold')
+        ax1.set_xlabel('Number of Turns', fontweight='bold')
+        ax1.set_ylabel('Density', fontweight='bold')
+        ax1.set_title('Distribution of Turns per Trajectory', fontweight='bold')
         ax1.legend()
         ax1.grid(True, alpha=0.3)
-        
-        # Box plot comparing success vs failed
-        success_turns = self.stats['turns']['success_turns']
-        failed_turns = self.stats['turns']['failed_turns']
-        
-        if success_turns and failed_turns:
-            box_data = [success_turns, failed_turns]
-            box_labels = ['Success', 'Failed']
-            
-            bp = ax2.boxplot(box_data, labels=box_labels, patch_artist=True, notch=True)
-            colors = ['lightgreen', 'lightcoral']
-            for patch, color in zip(bp['boxes'], colors):
-                patch.set_facecolor(color)
-                patch.set_alpha(0.7)
-        
-        ax2.set_ylabel('Number of Turns', fontsize=12)
-        ax2.set_title('Turns by Success Status', fontsize=14, fontweight='bold')
-        ax2.grid(True, alpha=0.3)
+        ax1.tick_params(axis='both', which='major', labelsize=12)
+        self._bold_ticks_bold(ax1)
         
         plt.tight_layout()
         plt.savefig(self.output_dir / 'turn_distribution.png', dpi=300, bbox_inches='tight')
@@ -282,179 +380,86 @@ class TrajectoryAnalyzer:
         sorted_tools = sorted(tool_counts.items(), key=lambda x: x[1], reverse=True)
         tools, counts = zip(*sorted_tools)
         
-        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(14, 12))
+        fig, ax1 = plt.subplots(1, 1, figsize=(8, 6))
         
-        # Bar chart of tool usage
-        colors = plt.cm.Set3(np.linspace(0, 1, len(tools)))
-        bars = ax1.bar(tools, counts, color=colors, edgecolor='black', alpha=0.8)
+        # Bar chart of tool usage with custom palette
+        colors = [CUSTOM_PALETTE[i % len(CUSTOM_PALETTE)] for i in range(len(tools))]
+        bars = ax1.bar(tools, counts, color=colors, edgecolor='black', alpha=0.8, width=0.8)
         
-        # Add value labels on bars
+        # Add value labels on top of bars, aligned to the left
         for bar in bars:
             height = bar.get_height()
-            ax1.text(bar.get_x() + bar.get_width()/2., height + max(counts)*0.01,
-                    f'{int(height)}', ha='center', va='bottom', fontweight='bold')
+            ax1.text(bar.get_x(), height + max(counts)*0.01,
+                    f'{int(height):,}', ha='left', va='bottom', fontweight='bold', fontsize=15, color='black')
         
-        ax1.set_xlabel('Tool Name', fontsize=12)
-        ax1.set_ylabel('Number of Calls', fontsize=12)
-        ax1.set_title('Tool Usage Distribution', fontsize=14, fontweight='bold')
-        ax1.tick_params(axis='x', rotation=45)
+        ax1.set_xlabel('Tool Name', fontweight='bold')
+        ax1.set_ylabel('Number of Calls', fontweight='bold')
+        ax1.set_title('Tool Usage Distribution', fontweight='bold')
+        ax1.tick_params(axis='x', rotation=45, labelsize=12)
+        ax1.tick_params(axis='y', labelsize=12)
+        self._bold_ticks_bold(ax1)
         ax1.grid(True, alpha=0.3)
         
-        # Pie chart of tool usage proportions
-        ax2.pie(counts, labels=tools, autopct='%1.1f%%', startangle=90, colors=colors)
-        ax2.set_title('Tool Usage Proportions', fontsize=14, fontweight='bold')
+        # Add more space at the top for the labels
+        ax1.set_ylim(0, max(counts) * 1.15)
         
         plt.tight_layout()
         plt.savefig(self.output_dir / 'tool_usage.png', dpi=300, bbox_inches='tight')
         plt.savefig(self.output_dir / 'tool_usage.pdf', bbox_inches='tight')
         plt.close()
         
-    def plot_intervention_analysis(self):
-        """Plot intervention and safety mechanism statistics."""
-        interventions = self.stats['interventions']
-        
-        fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(16, 12))
-        
-        # Intervention types
-        if interventions['types']:
-            int_types, int_counts = zip(*interventions['types'].items())
-            colors = plt.cm.Pastel1(np.linspace(0, 1, len(int_types)))
-            
-            ax1.bar(int_types, int_counts, color=colors, edgecolor='black', alpha=0.8)
-            ax1.set_xlabel('Intervention Type', fontsize=12)
-            ax1.set_ylabel('Count', fontsize=12)
-            ax1.set_title('Safety Intervention Types', fontsize=14, fontweight='bold')
-            ax1.tick_params(axis='x', rotation=45)
-            ax1.grid(True, alpha=0.3)
-        
-        # Retry distribution
-        if interventions['retry_counts']:
-            ax2.hist(interventions['retry_counts'], bins=10, alpha=0.7, 
-                    color='orange', edgecolor='black')
-            ax2.set_xlabel('Retries per Trajectory', fontsize=12)
-            ax2.set_ylabel('Frequency', fontsize=12)
-            ax2.set_title('Retry Distribution', fontsize=14, fontweight='bold')
-            ax2.grid(True, alpha=0.3)
-        
-        # Summary statistics as text
-        summary_text = f"""
-        Intervention Summary:
-        
-        • Final Turn Injections: {interventions['final_turn_injections']}
-        • Length Warnings: {interventions['length_warnings']}
-        • Loop Interventions: {interventions['loop_interventions']}
-        • Context Truncations: {interventions['context_truncations']}
-        • Total Retries: {interventions['total_retries']}
-        
-        Safety Rate: {(sum(interventions['types'].values()) / self.stats['total_trajectories'] * 100):.1f}%
-        """
-        
-        ax3.text(0.05, 0.95, summary_text, transform=ax3.transAxes, fontsize=11,
-                verticalalignment='top', bbox=dict(boxstyle='round', facecolor='lightblue', alpha=0.5))
-        ax3.set_xlim(0, 1)
-        ax3.set_ylim(0, 1)
-        ax3.axis('off')
-        ax3.set_title('Intervention Summary', fontsize=14, fontweight='bold')
-        
-        # Status distribution
-        status_dist = self.stats['status_distribution']
-        if status_dist:
-            status_labels, status_counts = zip(*status_dist.items())
-            colors = ['lightgreen' if s == 'success' else 'lightcoral' if s == 'failed' else 'lightgray' 
-                     for s in status_labels]
-            
-            ax4.pie(status_counts, labels=status_labels, autopct='%1.1f%%', 
-                   startangle=90, colors=colors)
-            ax4.set_title('Trajectory Status Distribution', fontsize=14, fontweight='bold')
-        
-        plt.tight_layout()
-        plt.savefig(self.output_dir / 'intervention_analysis.png', dpi=300, bbox_inches='tight')
-        plt.savefig(self.output_dir / 'intervention_analysis.pdf', bbox_inches='tight')
-        plt.close()
-        
     def plot_token_analysis(self):
         """Plot token usage analysis."""
         tokens = self.stats['tokens']
         
-        fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(16, 12))
+        # First plot: Token distribution by type
+        fig1, ax1 = plt.subplots(1, 1, figsize=(6, 5))
         
-        # Token distribution by type
         token_types = ['LLM', 'Tool', 'Input']
         token_means = [tokens['llm']['mean'], tokens['tool']['mean'], tokens['input']['mean']]
         token_stds = [tokens['llm']['std'], tokens['tool']['std'], tokens['input']['std']]
         
-        colors = ['#FF6B6B', '#4ECDC4', '#45B7D1']
+        colors = [CUSTOM_PALETTE[0], CUSTOM_PALETTE[1], CUSTOM_PALETTE[2]]
         bars = ax1.bar(token_types, token_means, yerr=token_stds, capsize=5, 
-                      color=colors, alpha=0.8, edgecolor='black')
+                      color=colors, alpha=0.8, edgecolor='black', width=0.9)
         
-        ax1.set_ylabel('Average Tokens', fontsize=12)
-        ax1.set_title('Token Usage by Type', fontsize=14, fontweight='bold')
+        ax1.set_ylabel('Average Tokens', fontweight='bold')
+        ax1.set_title('Token Usage by Type', fontweight='bold')
+        ax1.tick_params(axis='both', which='major', labelsize=12)
+        self._bold_ticks_bold(ax1)
         ax1.grid(True, alpha=0.3)
         
-        # Add value labels
+        # Add value labels on top of bars, aligned to the left
         for bar, mean in zip(bars, token_means):
-            ax1.text(bar.get_x() + bar.get_width()/2., bar.get_height() + max(token_means)*0.01,
-                    f'{int(mean)}', ha='center', va='bottom', fontweight='bold')
-        
-        # Total token distribution
-        if tokens['total']['distribution']:
-            ax2.hist(tokens['total']['distribution'], bins=30, alpha=0.7, 
-                    color='purple', edgecolor='black')
-            ax2.axvline(tokens['total']['mean'], color='red', linestyle='--', 
-                       label=f"Mean: {tokens['total']['mean']:.0f}")
-            ax2.set_xlabel('Total Tokens per Trajectory', fontsize=12)
-            ax2.set_ylabel('Frequency', fontsize=12)
-            ax2.set_title('Total Token Distribution', fontsize=14, fontweight='bold')
-            ax2.legend()
-            ax2.grid(True, alpha=0.3)
-        
-        # Stacked bar for token composition
-        if tokens['llm']['distribution'] and tokens['tool']['distribution']:
-            # Sample some trajectories for visualization
-            sample_indices = np.random.choice(len(tokens['llm']['distribution']), 
-                                            min(20, len(tokens['llm']['distribution'])), replace=False)
-            
-            llm_sample = [tokens['llm']['distribution'][i] for i in sample_indices]
-            tool_sample = [tokens['tool']['distribution'][i] for i in sample_indices]
-            input_sample = [tokens['input']['distribution'][i] for i in sample_indices]
-            
-            x_pos = range(len(sample_indices))
-            
-            ax3.bar(x_pos, llm_sample, label='LLM Tokens', color=colors[0], alpha=0.8)
-            ax3.bar(x_pos, tool_sample, bottom=llm_sample, label='Tool Tokens', 
-                   color=colors[1], alpha=0.8)
-            bottom_values = [l + t for l, t in zip(llm_sample, tool_sample)]
-            ax3.bar(x_pos, input_sample, bottom=bottom_values, label='Input Tokens', 
-                   color=colors[2], alpha=0.8)
-            
-            ax3.set_xlabel('Sample Trajectories', fontsize=12)
-            ax3.set_ylabel('Tokens', fontsize=12)
-            ax3.set_title('Token Composition (Sample)', fontsize=14, fontweight='bold')
-            ax3.legend()
-            ax3.grid(True, alpha=0.3)
-        
-        # Token efficiency scatter plot
-        if tokens['llm']['distribution'] and self.stats['turns']['distribution']:
-            llm_tokens_list = tokens['llm']['distribution']
-            turns_list = self.stats['turns']['distribution'][:len(llm_tokens_list)]
-            
-            ax4.scatter(turns_list, llm_tokens_list, alpha=0.6, color='green', s=50)
-            
-            # Add trend line
-            if len(turns_list) > 1:
-                z = np.polyfit(turns_list, llm_tokens_list, 1)
-                p = np.poly1d(z)
-                ax4.plot(turns_list, p(turns_list), "r--", alpha=0.8, linewidth=2)
-            
-            ax4.set_xlabel('Number of Turns', fontsize=12)
-            ax4.set_ylabel('LLM Tokens', fontsize=12)
-            ax4.set_title('Token Efficiency vs Turns', fontsize=14, fontweight='bold')
-            ax4.grid(True, alpha=0.3)
+            height = bar.get_height()
+            ax1.text(bar.get_x(), height + max(token_means)*0.01,
+                    f'{int(mean):,}', ha='left', va='bottom', fontweight='bold', fontsize=15, color='black')
         
         plt.tight_layout()
-        plt.savefig(self.output_dir / 'token_analysis.png', dpi=300, bbox_inches='tight')
-        plt.savefig(self.output_dir / 'token_analysis.pdf', bbox_inches='tight')
+        plt.savefig(self.output_dir / 'token_usage_by_type.png', dpi=300, bbox_inches='tight')
+        plt.savefig(self.output_dir / 'token_usage_by_type.pdf', bbox_inches='tight')
         plt.close()
+        
+        # Second plot: Total token distribution
+        if tokens['total']['distribution']:
+            fig2, ax2 = plt.subplots(1, 1, figsize=(8, 5))
+            
+            ax2.hist(tokens['total']['distribution'], bins=30, alpha=0.7, 
+                    color=DEFAULT_COLOR, edgecolor='black')
+            ax2.axvline(tokens['total']['mean'], color=CUSTOM_PALETTE[3], linestyle='--', 
+                       label=f"Mean: {tokens['total']['mean']:.0f}")
+            ax2.set_xlabel('Total Tokens per Trajectory', fontweight='bold')
+            ax2.set_ylabel('Frequency', fontweight='bold')
+            ax2.set_title('Total Token Distribution', fontweight='bold')
+            ax2.legend()
+            ax2.tick_params(axis='both', which='major', labelsize=12)
+            self._bold_ticks_bold(ax2)
+            ax2.grid(True, alpha=0.3)
+            
+            plt.tight_layout()
+            plt.savefig(self.output_dir / 'token_distribution.png', dpi=300, bbox_inches='tight')
+            plt.savefig(self.output_dir / 'token_distribution.pdf', bbox_inches='tight')
+            plt.close()
         
     def generate_summary_report(self):
         """Generate a comprehensive summary report."""
@@ -527,7 +532,6 @@ Generated by Artsiv Trajectory Analyzer
         LOG.info("Generating visualizations...")
         self.plot_turn_distribution()
         self.plot_tool_usage()
-        self.plot_intervention_analysis()
         self.plot_token_analysis()
         
         # Generate summary report
@@ -540,6 +544,7 @@ Generated by Artsiv Trajectory Analyzer
 
 
 def main():
+    # Bold fonts (Arial/Helvetica) are set globally above.
     parser = argparse.ArgumentParser(description="Analyze Artsiv trajectory data and generate visualizations")
     parser.add_argument('--input', '-i', required=True, help='Path to input JSONL file')
     parser.add_argument('--output', '-o', required=True, help='Output directory for plots and reports')
