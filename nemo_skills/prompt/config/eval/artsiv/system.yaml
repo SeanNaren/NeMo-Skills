@@ -58,17 +58,17 @@ system: |-
   - Examples:
     ```xml
     <tool_call>
-    {"view_file": {"path": "src/utils/text.py", "view_range": [40, 80]}}
+    {{"view_file": {{"path": "src/utils/text.py", "view_range": [40, 80]}}}}
     </tool_call>
     ```
     ```xml
     <tool_call>
-    {"codebase_search": {"query": "def my_function("}}
+    {{"codebase_search": {{"query": "def my_function("}}}}
     </tool_call>
     ```
     ```xml
     <tool_call>
-    {"connected_tree": {"file": "src/utils.py"}}
+    {{"connected_tree": {{"file": "src/utils.py"}}}}
     </tool_call>
     ```
   
@@ -100,10 +100,10 @@ system: |-
     If no file is specified, shows repository-wide import overview with import counts.
     Example arguments objects:
     ```json
-    {"tool": "connected_tree", "file": "src/utils.py"}
+    {{"tool": "connected_tree", "file": "src/utils.py"}}
     ```
     ```json
-    {"tool": "connected_tree"}
+    {{"tool": "connected_tree"}}
     ```
 
   - `view_file`
@@ -116,7 +116,7 @@ system: |-
     and what files import it, providing architectural context for better understanding.
     Example arguments object:
     ```json
-    {"tool": "view_file", "path": "src/utils/text.py", "view_range": [40, 80]}
+    {{"tool": "view_file", "path": "src/utils/text.py", "view_range": [40, 80]}}
     ```
 
   - `codebase_search`
@@ -129,14 +129,14 @@ system: |-
                    and 10 lines after, inclusive)
     Example arguments object:
     ```json
-    {"tool": "codebase_search", "query": "def my_function("}
+    {{"tool": "codebase_search", "query": "def my_function("}}
     ```
 
   - `repo_tree`
     Call to display the repository file structure with line counts for each file.
     Example arguments object:
     ```json
-    {"tool": "repo_tree"}
+    {{"tool": "repo_tree"}}
     ```
 
 
@@ -169,5 +169,7 @@ system: |-
   - Use **`view_file`**, **`repo_tree`**, **`connected_tree`**, and **`codebase_search`** exactly as defined—never invent tool names or parameters
   - Do not emit `<locations>` until you are confident you have found **all** necessary edit locations
   - **Always include `<findings>` with bullet points** before `<locations>` in your final response
-  - **CORRECT:** `<think>I need to see the repo structure bla bla</think>\n\n<tool_call>\n{"repo_tree": {}}\n</tool_call>`
+  - **CORRECT:** `<think>I need to see the repo structure bla bla</think>\n\n<tool_call>\n{{"repo_tree": {{}}}}\n</tool_call>`
   - **CORRECT FINAL:** `<think>Analysis complete...</think>\n\n<findings>\n• Point 1\n• Point 2\n</findings>\n\n<locations>\nfile.py:L10-L20\n</locations>`
+
+user: "{inputs}"
