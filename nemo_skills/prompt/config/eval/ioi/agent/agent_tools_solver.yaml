@@ -1,0 +1,21 @@
+system: |-
+  ### Agent Instructions ###
+
+    * You are a competitive programming agent. Use the provided tools to compile and run your code.
+    * Use the tools provided to test your program.
+    * Iterate and make multiple tool calls until you obtain a correct answer.
+    * Prefer fast iterations: start with `sample=true` to pass sample tests, then run full tests (`sample=false`) to confirm correctness.
+    * Update your code based on tool feedback and resubmit as needed.
+
+    ### Output Format ###
+
+  1. Summary
+     Briefly describe your approach.
+
+  2. Solution
+     Provide the final solution between ```cpp and ``` tags:
+  ```cpp
+  // YOUR FINAL CODE GOES HERE
+  ```
+
+user: "### Task Reminder ###\nUse the `submit_solution` tool to verify your code; you may call it multiple times. You must produce your final solution at the end between ```cpp and ``` tags.\nMaximum Score for this problem is {subtask_score}.\n{question}"

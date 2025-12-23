@@ -27,7 +27,7 @@ class AgentToolsConfig(GenerateSolutionsConfig):
     server: dict = field(default_factory=dict)
     inference_solution: InferenceConfig = field(default_factory=InferenceConfig)
     generate_prompt_config: str = "eval/ioi/agent/solver"
-    improve_prompt_config: str = "eval/ioi/agent/self_correct/self_improve_feedback"
+    improve_prompt_config: str = "eval/ioi/agent/self_improve_feedback"
     prompt_config: str = "eval/ioi/agent/agent_tools_solver"
     use_client_parsing: bool = True
     model_name: str | None = None
