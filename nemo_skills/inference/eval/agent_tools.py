@@ -413,6 +413,10 @@ class AgentToolsGenerationTask(GenerationTask):
             # Always restore original config
             self.cfg.server = original_server_config
 
+    def wait_for_sandbox(self):
+        if self.cfg.wait_for_sandbox and self.sandbox:
+            self.sandbox.wait_for_sandbox()
+
 
 GENERATION_TASK_CLASS = AgentToolsGenerationTask
 
