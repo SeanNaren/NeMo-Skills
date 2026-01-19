@@ -297,6 +297,8 @@ class AgentToolsGenerationTask(GenerationTask):
             if not isinstance(tool_calls, list) or len(tool_calls) == 0:
                 break
 
+            print(f"tool_calls: {tool_calls}")
+
             execution_results = []
             should_terminate = False
             for gen in tool_calls:
