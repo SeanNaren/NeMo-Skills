@@ -13,7 +13,6 @@ from nemo_skills.inference.eval.bfcl import ClientMessageParser, ServerMessagePa
 from nemo_skills.inference.eval.bfcl_utils import MAXIMUM_STEP_LIMIT
 from nemo_skills.inference.generate import GenerateSolutionsConfig, GenerationTask, InferenceConfig
 from nemo_skills.inference.model import get_model, server_params
-from nemo_skills.inference.model.base import EndpointType
 from nemo_skills.inference.model.utils import is_context_window_exceeded_error
 from nemo_skills.prompt.utils import get_prompt, get_token_count
 from nemo_skills.utils import get_help_message, get_logger_name, nested_dataclass, setup_logging
@@ -205,9 +204,7 @@ class AgentToolsGenerationTask(GenerationTask):
         if not self.solution_llm:
             raise RuntimeError("solution LLM not configured")
         async with self.solution_semaphore:
-            return await self.solution_llm.generate_async(
-                prompt=messages, endpoint_type=EndpointType.chat, **self.cfg.inference_solution.__dict__
-            )
+            return await self.solution_llm.generate_async(prompt=messages, **self.cfg.inference_solution.__dict__)
 
     def _build_tools(self):
         return [
