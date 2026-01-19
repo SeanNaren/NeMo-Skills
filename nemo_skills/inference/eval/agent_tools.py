@@ -387,6 +387,32 @@ class AgentToolsGenerationTask(GenerationTask):
             out["error"] = "_ran_out_of_context_"
         return out
 
+    def wait_for_server(self):
+        """Wait for all servers to be ready by calling parent's wait method for each.
+
+        Delegates to base class's wait_for_server() method for each server address.
+        This reuses all base class validation and subprocess logic.
+        """
+        LOG.info(f"Waiting for {len(self.server_addresses)} server(s) to be ready...")
+
+        # Store original multi-server config
+        original_server_config = self.cfg.server.copy()
+
+        try:
+            for idx, (address, model_name) in enumerate(zip(self.server_addresses, self.model_names)):
+                # Ensure base_url has http:// prefix if not already present
+                if not address.startswith(("http://", "https://")):
+                    address = f"http://{address}"
+
+                LOG.info(f"Waiting for Server {idx} ({model_name}) @ {address}...")
+                # Temporarily set server config to single server for parent method
+                self.cfg.server = {"base_url": address}
+                super().wait_for_server()
+                LOG.info(f"✓ Server {idx} ({model_name}) is ready!")
+        finally:
+            # Always restore original config
+            self.cfg.server = original_server_config
+
 
 GENERATION_TASK_CLASS = AgentToolsGenerationTask
 
