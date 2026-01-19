@@ -257,11 +257,11 @@ class AgentToolsGenerationTask(GenerationTask):
             },
         ]
 
-    async def process_single_datapoint(self, data_point, all_data, prompt=None):
+    async def process_single_datapoint(self, data_point, all_data):
         # ICPC does not have a subtask score, we add it manually (max score is 1)
         if data_point.get("subtask_score") is None:
             data_point["subtask_score"] = "1"
-        messages = self.fill_prompt(data_point, all_data, prompt=self.prompt)
+        messages = self.fill_prompt(data_point, all_data)
         tools = self._build_tools()
         state_dict = {"messages": messages, "tools": tools}
 
