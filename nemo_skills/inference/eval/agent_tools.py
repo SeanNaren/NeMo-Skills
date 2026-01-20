@@ -171,6 +171,7 @@ class AgentToolsGenerationTask(GenerationTask):
                 return return_dict
             else:
                 raise error
+        print("raw agent output--------------------------------\n", output, "--------------------------------")
         parsed_response = self.message_parser.parse_output_dict(output)
         return_dict.update(parsed_response)
         return return_dict
