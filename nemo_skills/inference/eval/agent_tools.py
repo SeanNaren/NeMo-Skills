@@ -227,10 +227,15 @@ class AgentToolsGenerationTask(GenerationTask):
                 "type": "function",
                 "function": {
                     "name": "generate_solution",
-                    "description": "Use a separate model to draft a new C++17 solution as a code block.",
+                    "description": "Use a separate model to draft a new C++17 solution as a code block. The question is provided automatically to the function.",
                     "parameters": {
                         "type": "object",
-                        "properties": {"instruction": {"type": "string", "description": "High-level instruction"}},
+                        "properties": {
+                            "note": {
+                                "type": "string",
+                                "description": "High-level additional notes to provide to the generation model when creating the solution.",
+                            }
+                        },
                     },
                 },
             },
@@ -238,7 +243,7 @@ class AgentToolsGenerationTask(GenerationTask):
                 "type": "function",
                 "function": {
                     "name": "improve_solution",
-                    "description": "Improve an existing C++17 solution using feedback.",
+                    "description": "Improve an existing C++17 solution using feedback. The question is provided automatically to the generation model when improving the solution.",
                     "parameters": {
                         "type": "object",
                         "properties": {
@@ -328,8 +333,8 @@ class AgentToolsGenerationTask(GenerationTask):
                             msgs = self.generate_prompt.fill(
                                 {"subtask_score": data_point["subtask_score"], "question": data_point["question"]}
                             )
-                            instruction = args["instruction"]
-                            msgs.append({"role": "user", "content": instruction})
+                            note = args["note"]
+                            msgs.append({"role": "user", "content": note})
                         else:
                             # Fill self-improve prompt
                             prev_code = args["prev_code"]
@@ -341,9 +346,8 @@ class AgentToolsGenerationTask(GenerationTask):
                                     "feedback": args["feedback"],
                                 }
                             )
-                        # lightweight recent context
-                        recent = [m for m in state_dict["messages"][-8:] if m["role"] in ("user", "assistant")]
-                        msgs.extend(recent)
+
+                        # todo: currently we do not keep previous messages.
                         sol_out = await self._call_solution_llm(msgs)
                         raw = sol_out.get("generation", "")
                         code = self.extract_code_block(raw)
@@ -379,6 +383,8 @@ class AgentToolsGenerationTask(GenerationTask):
             "num_generated_tokens": sum(num_generated_tokens_list),
             "num_generated_tokens_list": num_generated_tokens_list,
         }
+        print("Exited loop, output\n", out)
+
         if self.cfg.count_prompt_tokens:
             out["num_input_tokens"] = sum(num_input_tokens_list)
             out["num_input_tokens_list"] = num_input_tokens_list
