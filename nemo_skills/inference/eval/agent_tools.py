@@ -276,7 +276,6 @@ class AgentToolsGenerationTask(GenerationTask):
 
         while True:
             model_response = await self._generate_single_assistant_turn(state_dict)
-            print(f"model_response: {model_response}")
             if model_response["message"] is None:
                 out_of_context = True
                 print("Quitting generation due to running out of context.")
@@ -318,8 +317,13 @@ class AgentToolsGenerationTask(GenerationTask):
                     if name == "submit_solution":
                         code = args["code"]
                         sample = bool(args["sample"])
-                        eval_payload = {**data_point, "generation": code, "only_sample_tests": sample}
+                        eval_payload = {
+                            **data_point,
+                            "generation": f"```cpp\n{code}\n```",
+                            "only_sample_tests": sample,
+                        }
                         eval_result = await self.evaluator.eval_single(eval_payload)
+                        print(f"eval_result: {eval_result}")
                         test_case_results = eval_result.get("test_case_results", {})
                         normalized = self._normalize_test_case_results(test_case_results)
                         subtask_scores = {k: v["score"] for k, v in normalized.items()}
@@ -350,6 +354,7 @@ class AgentToolsGenerationTask(GenerationTask):
 
                         # todo: currently we do not keep previous messages.
                         sol_out = await self._call_solution_llm(msgs)
+                        print(f"sol_out: {sol_out}")
                         raw = sol_out.get("generation", "")
                         code = self.extract_code_block(raw)
                         if not code:
