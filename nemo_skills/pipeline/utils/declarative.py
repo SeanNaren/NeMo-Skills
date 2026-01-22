@@ -306,6 +306,7 @@ class Pipeline:
         skip_hf_home_check: bool | None = None,
         with_ray: bool = False,
         run_after: Optional[Union[str, List[str]]] = None,  # Pipeline-level dependency on other experiments
+        extra_package_dirs: Optional[List[str]] = None,
     ):
         self.name = name
         self.cluster_config = cluster_config
@@ -318,6 +319,7 @@ class Pipeline:
         self.with_ray = with_ray
         self.run_after = run_after
         self.jobs = jobs
+        self.extra_package_dirs = extra_package_dirs
 
         # Validate configuration early
         self._validate()
@@ -593,6 +595,7 @@ class Pipeline:
                 with_ray=self.with_ray,
                 sbatch_kwargs=hardware.sbatch_kwargs,
                 dependencies=dependencies,
+                extra_package_dirs=tuple(self.extra_package_dirs) if self.extra_package_dirs else None,
             )
 
     def _plan_and_add_job(

@@ -110,6 +110,9 @@ class AgentToolsGenerationTask(GenerationTask):
         self.improve_prompt = get_prompt(cfg.improve_prompt_config, examples_type=cfg.examples_type)
         self.message_parser = ClientMessageParser(cfg) if cfg.use_client_parsing else ServerMessageParser(cfg)
 
+    def dp_print(self, data_point, *args, **kwargs):
+        print(f"[{data_point['id']}]", *args, **kwargs)
+
     def setup_llm(self):
         # Create sandbox like base class
         self.sandbox = get_sandbox(**self.cfg.sandbox) if self.cfg.sandbox else None
@@ -237,6 +240,7 @@ class AgentToolsGenerationTask(GenerationTask):
                                 "description": "High-level additional notes to provide to the generation model when creating the solution.",
                             }
                         },
+                        "required": [],
                     },
                 },
             },
@@ -264,6 +268,7 @@ class AgentToolsGenerationTask(GenerationTask):
         # ICPC does not have a subtask score, we add it manually (max score is 1)
         if data_point.get("subtask_score") is None:
             data_point["subtask_score"] = "1"
+
         messages = self.fill_prompt(data_point, all_data)
         tools = self._build_tools()
         state_dict = {"messages": messages, "tools": tools}
@@ -278,7 +283,7 @@ class AgentToolsGenerationTask(GenerationTask):
             model_response = await self._generate_single_assistant_turn(state_dict)
             if model_response["message"] is None:
                 out_of_context = True
-                print("Quitting generation due to running out of context.")
+                self.dp_print(data_point, "Quitting generation due to running out of context.")
                 break
 
             num_generated_tokens_list.append(model_response.get("num_generated_tokens", 0))
@@ -299,7 +304,7 @@ class AgentToolsGenerationTask(GenerationTask):
             if not isinstance(tool_calls, list) or len(tool_calls) == 0:
                 break
 
-            print(f"tool_calls: {tool_calls}")
+            self.dp_print(data_point, f"tool_calls: {tool_calls}")
 
             execution_results = []
             should_terminate = False
@@ -311,7 +316,7 @@ class AgentToolsGenerationTask(GenerationTask):
                         try:
                             args = json.loads(raw_args)
                         except Exception:
-                            print(f"invalid arguments {raw_args}")
+                            self.dp_print(data_point, f"invalid arguments {raw_args}")
                             execution_results.append(json.dumps({"error": "invalid arguments"}))
                             continue
                     if name == "submit_solution":
@@ -323,7 +328,7 @@ class AgentToolsGenerationTask(GenerationTask):
                             "only_sample_tests": sample,
                         }
                         eval_result = await self.evaluator.eval_single(eval_payload)
-                        print(f"eval_result: {eval_result}")
+                        self.dp_print(data_point, f"eval_result: {eval_result}")
                         test_case_results = eval_result.get("test_case_results", {})
                         normalized = self._normalize_test_case_results(test_case_results)
                         subtask_scores = {k: v["score"] for k, v in normalized.items()}
@@ -338,7 +343,7 @@ class AgentToolsGenerationTask(GenerationTask):
                             msgs = self.generate_prompt.fill(
                                 {"subtask_score": data_point["subtask_score"], "question": data_point["question"]}
                             )
-                            note = args["note"]
+                            note = args["note"] if args["note"] else ""
                             msgs.append({"role": "user", "content": note})
                         else:
                             # Fill self-improve prompt
@@ -354,17 +359,17 @@ class AgentToolsGenerationTask(GenerationTask):
 
                         # todo: currently we do not keep previous messages.
                         sol_out = await self._call_solution_llm(msgs)
-                        print(f"sol_out: {sol_out}")
+                        self.dp_print(data_point, f"sol_out: {sol_out}")
                         raw = sol_out.get("generation", "")
                         code = self.extract_code_block(raw)
                         if not code:
                             code = "failed to create new solution, suggest retrying again"
                         execution_results.append(json.dumps({"code": code}))
                     else:
-                        print(f"unknown tool {name}")
+                        self.dp_print(data_point, f"unknown tool {name}")
                         execution_results.append(json.dumps({"error": f"unknown tool {name}"}))
                 except Exception as e:
-                    print(f"error {e}")
+                    self.dp_print(data_point, f"error {e}")
                     execution_results.append(json.dumps({"error": str(e)}))
 
             for execution_result, tool_call_id in zip(execution_results, tool_call_ids):
@@ -373,14 +378,16 @@ class AgentToolsGenerationTask(GenerationTask):
                 )
 
             if should_terminate:
-                print(f"[Success] Problem {data_point['id']}: All test cases passed. Stopping early.")
+                self.dp_print(data_point, "[Success] All test cases passed. Stopping early.")
                 break
 
             step_count += 1
             if step_count >= min(int(self.cfg.max_steps), MAXIMUM_STEP_LIMIT):
-                print(f"Forced stop after {min(int(self.cfg.max_steps), MAXIMUM_STEP_LIMIT)} steps.")
+                self.dp_print(
+                    data_point, f"Forced stop after {min(int(self.cfg.max_steps), MAXIMUM_STEP_LIMIT)} steps."
+                )
                 break
-            print(f"messages: {state_dict['messages']}")
+            self.dp_print(data_point, f"step_count: {step_count}")
 
         out = {
             "id": data_point["id"],
@@ -389,7 +396,7 @@ class AgentToolsGenerationTask(GenerationTask):
             "num_generated_tokens": sum(num_generated_tokens_list),
             "num_generated_tokens_list": num_generated_tokens_list,
         }
-        print("Exited loop, output\n", out)
+        self.dp_print(data_point, "Exited loop, output\n", out)
 
         if self.cfg.count_prompt_tokens:
             out["num_input_tokens"] = sum(num_input_tokens_list)
