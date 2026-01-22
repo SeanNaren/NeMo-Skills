@@ -226,7 +226,7 @@ class ReasoningAgentGenerationTask(GenerationTask):
             }
             self.dp_print(
                 data_point,
-                f"reasoner_tokens={r.get('num_generated_tokens', 0)} content_len={len(r_msg['content'])}",
+                f"reasoner_tokens={r.get('num_generated_tokens', 0)} content_len={len(r_msg['content'])} reasoner_total={sum(num_reasoner_tokens)}",
             )
             reasoner_messages.append(r_msg)
             trace.append({"source": "reasoner", **r_msg})
