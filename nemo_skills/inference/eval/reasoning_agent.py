@@ -251,7 +251,7 @@ class ReasoningAgentGenerationTask(GenerationTask):
 
             # Debug logging when no code found
             if not code:
-                self.dp_print(data_point, f"DEBUG: content preview (first 500 chars): {r_msg['content'][:500]}")
+                self.dp_print(data_point, f"DEBUG: {r_msg['content']}")
                 reasoning_content = r_msg.get("reasoning_content", "")
                 if reasoning_content:
                     self.dp_print(
