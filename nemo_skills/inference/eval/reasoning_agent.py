@@ -29,9 +29,10 @@ class ReasoningAgentConfig(GenerateSolutionsConfig):
     model_name: str | None = None
     max_steps: int = 10
     agent_system_message: str = (
-        "You are a tool-using coding agent. You will be given a candidate C++17 solution. "
-        "Call submit_solution with the code (and sample=true if you want to run only samples first). "
-        "Do not edit the code unless explicitly asked."
+        "You are a tool-using coding agent. When given a candidate C++17 solution, call submit_solution with the code "
+        "(and sample=true if you want to run only samples first). Do not edit the code.\n\n"
+        "After receiving test results, if the solution failed, provide a concise summary of what went wrong "
+        "and what needs to be fixed. This feedback will be given to the reasoner to generate an improved solution."
     )
     reasoner_system_message: str = (
         "You are a reasoning-focused competitive programming solver. "
@@ -212,17 +213,23 @@ class ReasoningAgentGenerationTask(GenerationTask):
 
         problem = data_point.get("question") or data_point.get("problem") or ""
         self.dp_print(data_point, "start")
-        reasoner_messages = [
-            {"role": "system", "content": self.cfg.reasoner_system_message},
-            {"role": "user", "content": problem},
-        ]
-        trace = [{"source": "reasoner", **reasoner_messages[0]}, {"source": "reasoner", **reasoner_messages[1]}]
+
+        # Initial instruction for the reasoner
+        reasoner_instruction = problem
+        reasoner_system = {"role": "system", "content": self.cfg.reasoner_system_message}
+        trace = [{"source": "reasoner", **reasoner_system}, {"source": "reasoner", "role": "user", "content": problem}]
 
         num_agent_tokens, num_reasoner_tokens = [], []
         final_code, out_of_context = "", False
 
         for step in range(max(1, int(self.cfg.max_steps))):
             self.dp_print(data_point, f"step {step + 1}/{max(1, int(self.cfg.max_steps))}: reasoner")
+
+            reasoner_messages = [
+                reasoner_system,
+                {"role": "user", "content": reasoner_instruction},
+            ]
+
             r = await self._reasoner_turn(reasoner_messages)
             num_reasoner_tokens.append(r.get("num_generated_tokens", 0))
             r_msg = {
@@ -235,18 +242,14 @@ class ReasoningAgentGenerationTask(GenerationTask):
                 f"reasoner_tokens={r.get('num_generated_tokens', 0)} content_len={len(r_msg['content'])} "
                 f"reasoning_len={len(r_msg.get('reasoning_content', ''))} reasoner_total={sum(num_reasoner_tokens)}",
             )
-            reasoner_messages.append({"role": "assistant", "content": r.get("generation", "")})
             trace.append({"source": "reasoner", **r_msg})
             code = self._extract_cpp(r_msg["content"])
 
             if not code:
                 self.dp_print(data_point, "reasoner: no cpp block")
-                fb = {
-                    "role": "user",
-                    "content": "No ```cpp``` block found. Return only a single ```cpp``` code block.",
-                }
-                reasoner_messages.append(fb)
-                trace.append({"source": "reasoner", **fb})
+                fb_content = "No ```cpp``` block found. Return only a single ```cpp``` code block."
+                trace.append({"source": "reasoner", "role": "user", "content": fb_content})
+                reasoner_instruction = fb_content
                 continue
 
             tools = self._build_tools()
@@ -275,13 +278,9 @@ class ReasoningAgentGenerationTask(GenerationTask):
             tool_calls = a.get("generation", [])
             tool_call_ids = a.get("tool_call_ids", [])
             if not isinstance(tool_calls, list) or len(tool_calls) == 0:
-                self.dp_print(data_point, "agent: no tool call")
-                fb = {
-                    "role": "user",
-                    "content": "Agent did not submit. Please output a corrected solution in ```cpp```.",
-                }
-                reasoner_messages.append(fb)
-                trace.append({"source": "reasoner", **fb})
+                self.dp_print(data_point, "agent: no tool call - skipping")
+                reasoner_instruction = "No solution was submitted. Return only a single ```cpp``` code block."
+                trace.append({"source": "reasoner", "role": "user", "content": reasoner_instruction})
                 continue
             self.dp_print(data_point, f"agent_tool_calls={len(tool_calls)}")
 
@@ -315,12 +314,33 @@ class ReasoningAgentGenerationTask(GenerationTask):
                     final_code = submitted
                     should_stop = True
                 else:
-                    fb = {
-                        "role": "user",
-                        "content": f"Submission result:\n{tool_out}\n\nFix the solution. Return only a single ```cpp``` code block.",
-                    }
-                    reasoner_messages.append(fb)
-                    trace.append({"source": "reasoner", **fb})
+                    # Agent automatically summarizes the feedback for the reasoner
+                    agent_messages.append(msg)
+                    tool_msg = {"role": "tool", "content": tool_out, "tool_call_id": tool_call_id}
+                    agent_messages.append(tool_msg)
+
+                    self.dp_print(data_point, "agent: processing feedback")
+                    summary_response = await self._agent_turn(agent_messages, tools=[])
+                    if summary_response.get("message") is None:
+                        self.dp_print(data_point, "agent: out_of_context during summary")
+                        out_of_context = True
+                        break
+
+                    num_agent_tokens.append(summary_response.get("num_generated_tokens", 0))
+                    summary_msg = summary_response["message"]
+                    if hasattr(summary_msg, "model_dump"):
+                        summary_msg = summary_msg.model_dump()
+                    trace.append({"source": "agent", **summary_msg})
+
+                    # Use agent's summary as the reasoner instruction
+                    summary_content = summary_msg.get("content", "")
+                    reasoner_instruction = (
+                        f"Previous solution:\n```cpp\n{submitted}\n```\n\n"
+                        f"Feedback: {summary_content}\n\n"
+                        f"You are tasked with taking the feedback and solution above and generating an improved solution. "
+                        f"Return only a single ```cpp``` code block."
+                    )
+                    trace.append({"source": "reasoner", "role": "user", "content": reasoner_instruction})
 
             if should_stop:
                 self.dp_print(data_point, "success")
