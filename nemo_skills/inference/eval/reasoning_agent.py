@@ -153,12 +153,28 @@ class ReasoningAgentGenerationTask(GenerationTask):
             }
         ]
 
-    def _extract_cpp(self, text: str | None) -> str | None:
-        if not text:
+    def _extract_cpp(self, text: str | None, reasoning_text: str | None = None) -> str | None:
+        """Extract C++ code from content or reasoning_content.
+
+        For DeepSeek models with thinking mode, code might be in reasoning_content instead of content.
+        """
+        if not text and not reasoning_text:
             return None
-        text = text.split("<|end|><|start|>assistant<|channel|>final<|message|>")[-1]
-        m = re.findall(r"```(?:cpp|c\+\+)\s*(.*?)```", text, re.DOTALL | re.IGNORECASE)
-        return m[-1].strip() if m else None
+
+        # Try final output first
+        if text:
+            text_final = text.split("<|end|><|start|>assistant<|channel|>final<|message|>")[-1]
+            m = re.findall(r"```(?:cpp|c\+\+)\s*(.*?)```", text_final, re.DOTALL | re.IGNORECASE)
+            if m:
+                return m[-1].strip()
+
+        # Fall back to reasoning content if nothing found in final output
+        if reasoning_text:
+            m = re.findall(r"```(?:cpp|c\+\+)\s*(.*?)```", reasoning_text, re.DOTALL | re.IGNORECASE)
+            if m:
+                return m[-1].strip()
+
+        return None
 
     def _normalize_scores(self, test_case_results: dict) -> dict:
         if (
@@ -226,11 +242,26 @@ class ReasoningAgentGenerationTask(GenerationTask):
             }
             self.dp_print(
                 data_point,
-                f"reasoner_tokens={r.get('num_generated_tokens', 0)} content_len={len(r_msg['content'])} reasoner_total={sum(num_reasoner_tokens)}",
+                f"reasoner_tokens={r.get('num_generated_tokens', 0)} content_len={len(r_msg['content'])} "
+                f"reasoning_len={len(r_msg.get('reasoning_content', ''))} reasoner_total={sum(num_reasoner_tokens)}",
             )
             reasoner_messages.append({"role": "assistant", "content": r.get("generation", "")})
             trace.append({"source": "reasoner", **r_msg})
-            code = self._extract_cpp(r_msg["content"])
+            code = self._extract_cpp(r_msg["content"], r_msg.get("reasoning_content"))
+
+            # Debug logging when no code found
+            if not code:
+                self.dp_print(data_point, f"DEBUG: content preview (first 500 chars): {r_msg['content'][:500]}")
+                reasoning_content = r_msg.get("reasoning_content", "")
+                if reasoning_content:
+                    self.dp_print(
+                        data_point, f"DEBUG: reasoning_content preview (last 1000 chars): {reasoning_content[-1000:]}"
+                    )
+                    # Check if cpp blocks exist at all
+                    import re
+
+                    cpp_blocks = re.findall(r"```(?:cpp|c\+\+)", r_msg["content"] + reasoning_content, re.IGNORECASE)
+                    self.dp_print(data_point, f"DEBUG: found {len(cpp_blocks)} cpp code block markers")
             if not code:
                 self.dp_print(data_point, "reasoner: no cpp block")
                 fb = {
