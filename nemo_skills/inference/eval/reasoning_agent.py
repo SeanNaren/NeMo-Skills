@@ -310,7 +310,7 @@ class ReasoningAgentGenerationTask(GenerationTask):
                 tool_out = json.dumps({"subtask_scores": subtask_scores, "success": success})
                 trace.append({"source": "tool", "role": "tool", "content": tool_out, "tool_call_id": tool_call_id})
                 self.dp_print(data_point, f"result: {tool_out}")
-                if success:
+                if success and not sample:
                     final_code = submitted
                     should_stop = True
                 else:
