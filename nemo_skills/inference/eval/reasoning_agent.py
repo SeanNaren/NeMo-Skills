@@ -28,6 +28,8 @@ class ReasoningAgentConfig(GenerateSolutionsConfig):
     use_client_parsing: bool = False
     model_name: str | None = None
     max_steps: int = 10
+    explicit_feedback: bool = False
+    avg_score: bool = True
     agent_system_message: str = (
         "You are a tool-using coding agent. When given a candidate C++17 solution, call submit_solution with the code "
         "(and sample=true if you want to run only samples first). Do not edit the code.\n\n"
@@ -168,14 +170,45 @@ class ReasoningAgentGenerationTask(GenerationTask):
         return None
 
     def _normalize_scores(self, test_case_results: dict) -> dict:
+        """Normalize evaluator outputs to a common shape:
+        {subtask: {"score": float, "outputs": list}}.
+
+        Supports both IOI-style per-subtask dicts and ICPC-style flat dict with
+        keys {"score": bool|float, "outputs": list} by mapping the latter to
+        a single "overall" subtask.
+        """
+        # ICPC-style: flat dict with outputs list
         if (
             isinstance(test_case_results, dict)
             and "outputs" in test_case_results
             and "score" in test_case_results
             and isinstance(test_case_results.get("outputs"), list)
         ):
-            return {"overall": {"score": float(test_case_results["score"])}}
-        return {k: {"score": float(v.get("score", 0.0))} for k, v in test_case_results.items()}
+            return {"overall": {"score": float(test_case_results["score"]), "outputs": test_case_results["outputs"]}}
+        # IOI-style: dict of subtasks
+        return {
+            k: {"score": float(v.get("score", 0.0)), "outputs": list(v.get("outputs", []))}
+            for k, v in test_case_results.items()
+        }
+
+    def _calculate_avg_score(self, normalized_results: dict) -> float:
+        """Calculate average score across all test outputs.
+
+        Returns the fraction of tests that passed (score == 1.0).
+        """
+        all_outputs = []
+        for subtask_data in normalized_results.values():
+            all_outputs.extend(subtask_data.get("outputs", []))
+
+        if not all_outputs:
+            return 0.0
+
+        try:
+            total = len(all_outputs)
+            passed = sum(1.0 if float(o.get("score", 0.0)) == 1.0 else 0.0 for o in all_outputs)
+            return float(passed / total)
+        except Exception:
+            return 0.0
 
     async def _agent_turn(self, messages: list[dict], tools: list[dict]) -> dict:
         if self.cfg.system_message:
@@ -249,7 +282,7 @@ class ReasoningAgentGenerationTask(GenerationTask):
                 self.dp_print(data_point, "reasoner: no cpp block")
                 fb_content = "No ```cpp``` block found. Return only a single ```cpp``` code block."
                 trace.append({"source": "reasoner", "role": "user", "content": fb_content})
-                reasoner_instruction = fb_content
+                reasoner_instruction = f"{problem}\n\n{fb_content}"
                 continue
 
             tools = self._build_tools()
@@ -279,7 +312,8 @@ class ReasoningAgentGenerationTask(GenerationTask):
             tool_call_ids = a.get("tool_call_ids", [])
             if not isinstance(tool_calls, list) or len(tool_calls) == 0:
                 self.dp_print(data_point, "agent: no tool call - skipping")
-                reasoner_instruction = "No solution was submitted. Return only a single ```cpp``` code block."
+                fb_content = "No solution was submitted. Return only a single ```cpp``` code block."
+                reasoner_instruction = f"{problem}\n\n{fb_content}"
                 trace.append({"source": "reasoner", "role": "user", "content": reasoner_instruction})
                 continue
             self.dp_print(data_point, f"agent_tool_calls={len(tool_calls)}")
@@ -305,11 +339,26 @@ class ReasoningAgentGenerationTask(GenerationTask):
                 eval_result = await self.evaluator.eval_single(eval_payload)
                 test_case_results = eval_result.get("test_case_results", {})
                 normalized = self._normalize_scores(test_case_results)
-                subtask_scores = {k: v["score"] for k, v in normalized.items()}
-                success = bool(normalized) and all(float(s) == 1.0 for s in subtask_scores.values())
-                tool_out = json.dumps({"subtask_scores": subtask_scores, "success": success})
+
+                # Build tool output
+                if self.cfg.explicit_feedback:
+                    tool_out_dict = eval_result
+                else:
+                    subtask_scores = {k: v["score"] for k, v in normalized.items()}
+                    success = bool(normalized) and all(float(s) == 1.0 for s in subtask_scores.values())
+                    tool_out_dict = {"subtask_scores": subtask_scores, "success": success}
+
+                # Add avg_score if requested
+                if self.cfg.avg_score:
+                    avg_score = self._calculate_avg_score(normalized)
+                    tool_out_dict["avg_score"] = avg_score
+
+                tool_out = json.dumps(tool_out_dict)
                 trace.append({"source": "tool", "role": "tool", "content": tool_out, "tool_call_id": tool_call_id})
                 self.dp_print(data_point, f"result: {tool_out}")
+
+                # Determine success for control flow (use normalized results)
+                success = bool(normalized) and all(float(v["score"]) == 1.0 for v in normalized.values())
                 if success and not sample:
                     final_code = submitted
                     should_stop = True
@@ -335,6 +384,7 @@ class ReasoningAgentGenerationTask(GenerationTask):
                     # Use agent's summary as the reasoner instruction
                     summary_content = summary_msg.get("content", "")
                     reasoner_instruction = (
+                        f"Problem:\n{problem}\n\n"
                         f"Previous solution:\n```cpp\n{submitted}\n```\n\n"
                         f"Feedback: {summary_content}\n\n"
                         f"You are tasked with taking the feedback and solution above and generating an improved solution. "
