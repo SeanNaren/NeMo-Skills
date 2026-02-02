@@ -293,107 +293,145 @@ class ReasoningAgentGenerationTask(GenerationTask):
             trace.append({"source": "agent", **agent_messages[0]})
             trace.append({"source": "agent", **agent_messages[1]})
 
-            self.dp_print(data_point, f"agent: submit candidate (code_len={len(code)})")
-            a = await self._agent_turn(agent_messages, tools)
-            if a.get("message") is None:
-                self.dp_print(data_point, "agent: out_of_context")
-                out_of_context = True
-                break
-            num_agent_tokens.append(a.get("num_generated_tokens", 0))
-            if self.cfg.count_prompt_tokens:
-                pass
-
-            msg = a["message"]
-            if hasattr(msg, "model_dump"):
-                msg = msg.model_dump()
-            trace.append({"source": "agent", **msg})
-
-            tool_calls = a.get("generation", [])
-            tool_call_ids = a.get("tool_call_ids", [])
-            if not isinstance(tool_calls, list) or len(tool_calls) == 0:
-                self.dp_print(data_point, "agent: no tool call - skipping")
-                fb_content = "No solution was submitted. Return only a single ```cpp``` code block."
-                reasoner_instruction = f"{problem}\n\n{fb_content}"
-                trace.append({"source": "reasoner", "role": "user", "content": reasoner_instruction})
-                continue
-            self.dp_print(data_point, f"agent_tool_calls={len(tool_calls)}")
-
             should_stop = False
-            for gen, tool_call_id in zip(tool_calls, tool_call_ids or [None] * len(tool_calls)):
-                (name, raw_args) = next(iter(gen.items()))
-                if name != "submit_solution":
-                    tool_out = json.dumps({"error": f"unknown tool {name}"})
-                    trace.append({"source": "tool", "role": "tool", "content": tool_out, "tool_call_id": tool_call_id})
-                    self.dp_print(data_point, f"tool: {tool_out}")
-                    continue
-                args = raw_args
-                if isinstance(raw_args, str):
-                    try:
-                        args = json.loads(raw_args)
-                    except Exception:
-                        args = {"code": raw_args}
-                submitted = args.get("code") or code
-                sample = bool(args.get("sample", False))
-                self.dp_print(data_point, f"submit_solution(sample={sample}) code_len={len(submitted)}")
-                eval_payload = {**data_point, "generation": f"```cpp\n{submitted}\n```", "only_sample_tests": sample}
-                eval_result = await self.evaluator.eval_single(eval_payload)
-                test_case_results = eval_result.get("test_case_results", {})
-                normalized = self._normalize_scores(test_case_results)
+            continue_agent_loop = True  # Start agent loop
 
-                # Build tool output
-                if self.cfg.explicit_feedback:
-                    tool_out_dict = eval_result
-                else:
-                    subtask_scores = {k: v["score"] for k, v in normalized.items()}
-                    success = bool(normalized) and all(float(s) == 1.0 for s in subtask_scores.values())
-                    tool_out_dict = {"subtask_scores": subtask_scores, "success": success}
+            # Agent loop - allows retrying submission (e.g., sample → full tests)
+            while continue_agent_loop:
+                continue_agent_loop = False  # Reset flag
 
-                # Add avg_score if requested
-                if self.cfg.avg_score:
-                    avg_score = self._calculate_avg_score(normalized)
-                    tool_out_dict["avg_score"] = avg_score
+                self.dp_print(data_point, f"agent: submit candidate (code_len={len(code)})")
+                a = await self._agent_turn(agent_messages, tools)
+                if a.get("message") is None:
+                    self.dp_print(data_point, "agent: out_of_context")
+                    out_of_context = True
+                    break
+                num_agent_tokens.append(a.get("num_generated_tokens", 0))
+                if self.cfg.count_prompt_tokens:
+                    pass
 
-                tool_out = json.dumps(tool_out_dict)
-                trace.append({"source": "tool", "role": "tool", "content": tool_out, "tool_call_id": tool_call_id})
-                self.dp_print(data_point, f"result: {tool_out}")
+                msg = a["message"]
+                if hasattr(msg, "model_dump"):
+                    msg = msg.model_dump()
+                trace.append({"source": "agent", **msg})
 
-                # Determine success for control flow (use normalized results)
-                success = bool(normalized) and all(float(v["score"]) == 1.0 for v in normalized.values())
-                if success and not sample:
-                    final_code = submitted
-                    should_stop = True
-                else:
-                    # Agent automatically summarizes the feedback for the reasoner
-                    agent_messages.append(msg)
-                    tool_msg = {"role": "tool", "content": tool_out, "tool_call_id": tool_call_id}
-                    agent_messages.append(tool_msg)
-
-                    self.dp_print(data_point, "agent: processing feedback")
-                    summary_response = await self._agent_turn(agent_messages, tools=[])
-                    if summary_response.get("message") is None:
-                        self.dp_print(data_point, "agent: out_of_context during summary")
-                        out_of_context = True
-                        break
-
-                    num_agent_tokens.append(summary_response.get("num_generated_tokens", 0))
-                    summary_msg = summary_response["message"]
-                    if hasattr(summary_msg, "model_dump"):
-                        summary_msg = summary_msg.model_dump()
-                    trace.append({"source": "agent", **summary_msg})
-
-                    # Use agent's summary as the reasoner instruction
-                    summary_content = summary_msg.get("content", "")
-                    reasoner_instruction = (
-                        f"Problem:\n{problem}\n\n"
-                        f"Previous solution:\n```cpp\n{submitted}\n```\n\n"
-                        f"Feedback: {summary_content}\n\n"
-                        f"You are tasked with taking the feedback and solution above and generating an improved solution. "
-                        f"Return only a single ```cpp``` code block."
-                    )
+                tool_calls = a.get("generation", [])
+                tool_call_ids = a.get("tool_call_ids", [])
+                if not isinstance(tool_calls, list) or len(tool_calls) == 0:
+                    self.dp_print(data_point, "agent: no tool call - skipping")
+                    fb_content = "No solution was submitted. Return only a single ```cpp``` code block."
+                    reasoner_instruction = f"{problem}\n\n{fb_content}"
                     trace.append({"source": "reasoner", "role": "user", "content": reasoner_instruction})
+                    break  # Exit agent loop, continue to next step
+                self.dp_print(data_point, f"agent_tool_calls={len(tool_calls)}")
 
+                for gen, tool_call_id in zip(tool_calls, tool_call_ids or [None] * len(tool_calls)):
+                    (name, raw_args) = next(iter(gen.items()))
+                    if name != "submit_solution":
+                        tool_out = json.dumps({"error": f"unknown tool {name}"})
+                        trace.append(
+                            {"source": "tool", "role": "tool", "content": tool_out, "tool_call_id": tool_call_id}
+                        )
+                        self.dp_print(data_point, f"tool: {tool_out}")
+                        continue
+                    args = raw_args
+                    if isinstance(raw_args, str):
+                        try:
+                            args = json.loads(raw_args)
+                        except Exception:
+                            args = {"code": raw_args}
+                    submitted = args.get("code") or code
+                    sample = bool(args.get("sample", False))
+                    self.dp_print(data_point, f"submit_solution(sample={sample}) code_len={len(submitted)}")
+                    eval_payload = {
+                        **data_point,
+                        "generation": f"```cpp\n{submitted}\n```",
+                        "only_sample_tests": sample,
+                    }
+                    eval_result = await self.evaluator.eval_single(eval_payload)
+                    test_case_results = eval_result.get("test_case_results", {})
+                    normalized = self._normalize_scores(test_case_results)
+
+                    # Build tool output
+                    if self.cfg.explicit_feedback:
+                        tool_out_dict = eval_result
+                    else:
+                        subtask_scores = {k: v["score"] for k, v in normalized.items()}
+                        success = bool(normalized) and all(float(s) == 1.0 for s in subtask_scores.values())
+                        tool_out_dict = {"subtask_scores": subtask_scores, "success": success}
+
+                    # Add avg_score if requested
+                    if self.cfg.avg_score:
+                        avg_score = self._calculate_avg_score(normalized)
+                        tool_out_dict["avg_score"] = avg_score
+
+                    # Determine success for control flow (use normalized results)
+                    success = bool(normalized) and all(float(v["score"]) == 1.0 for v in normalized.values())
+
+                    # Add message to tool output if sample tests passed
+                    if success and sample:
+                        tool_out_dict["message"] = (
+                            "Sample tests passed! Now submit the solution with sample=false for full evaluation."
+                        )
+
+                    tool_out = json.dumps(tool_out_dict)
+                    trace.append({"source": "tool", "role": "tool", "content": tool_out, "tool_call_id": tool_call_id})
+                    self.dp_print(data_point, f"result: {tool_out}")
+
+                    if success and not sample:
+                        # Full tests passed - we're done!
+                        final_code = submitted
+                        should_stop = True
+                        break  # Exit tool call loop
+                    elif success and sample:
+                        # Sample tests passed - agent will retry based on tool message
+                        self.dp_print(data_point, "sample tests passed, prompting agent for full submission")
+
+                        # Set flag to continue agent loop (retry agent turn)
+                        continue_agent_loop = True
+                        break  # Exit tool call loop, restart agent loop
+                    else:
+                        # Tests failed - get agent feedback for the reasoner
+                        agent_messages.append(msg)
+                        tool_msg = {"role": "tool", "content": tool_out, "tool_call_id": tool_call_id}
+                        agent_messages.append(tool_msg)
+
+                        self.dp_print(data_point, "agent: processing feedback")
+                        summary_response = await self._agent_turn(agent_messages, tools=[])
+                        if summary_response.get("message") is None:
+                            self.dp_print(data_point, "agent: out_of_context during summary")
+                            out_of_context = True
+                            break
+
+                        num_agent_tokens.append(summary_response.get("num_generated_tokens", 0))
+                        summary_msg = summary_response["message"]
+                        if hasattr(summary_msg, "model_dump"):
+                            summary_msg = summary_msg.model_dump()
+                        trace.append({"source": "agent", **summary_msg})
+
+                        # Use agent's summary as the reasoner instruction
+                        summary_content = summary_msg.get("content", "")
+                        reasoner_instruction = (
+                            f"Problem:\n{problem}\n\n"
+                            f"Previous solution:\n```cpp\n{submitted}\n```\n\n"
+                            f"Feedback: {summary_content}\n\n"
+                            f"You are tasked with taking the feedback and solution above and generating an improved solution. "
+                            f"Return only a single ```cpp``` code block."
+                        )
+                        trace.append({"source": "reasoner", "role": "user", "content": reasoner_instruction})
+
+            # Check if we need to break out of agent loop
+            if out_of_context or should_stop:
+                break
+
+            # If continue_agent_loop is still True, we loop back for another agent turn
+            # (e.g., after sample test success)
+
+            # After agent loop, check if we should stop the step loop
             if should_stop:
                 self.dp_print(data_point, "success")
+                break
+            if out_of_context:
                 break
         else:
             final_code = code if "code" in locals() else ""
