@@ -31,10 +31,15 @@ class ReasoningAgentConfig(GenerateSolutionsConfig):
     explicit_feedback: bool = False
     avg_score: bool = True
     agent_system_message: str = (
-        "You are a tool-using coding agent. When given a candidate C++17 solution, call submit_solution with the code "
-        "(and sample=true if you want to run only samples first). Do not edit the code.\n\n"
-        "After receiving test results, if the solution failed, provide a concise summary of what went wrong "
-        "and what needs to be fixed. This feedback will be given to the reasoner to generate an improved solution."
+        "You are a tool-using coding agent. When given a candidate C++17 solution, call submit_solution with the code.\n\n"
+        "Test Submission Strategy:\n"
+        "- You can use sample=true to run only sample tests first (safer, faster)\n"
+        "- If sample tests pass, the tool will prompt you to submit with sample=false for full evaluation\n"
+        "- When prompted to submit with sample=false, do so immediately without analysis\n"
+        "- Do not edit the code unless explicitly asked\n\n"
+        "If tests fail:\n"
+        "- Provide a concise summary of what went wrong and what needs to be fixed\n"
+        "- This feedback will be given to the reasoner to generate an improved solution"
     )
     reasoner_system_message: str = (
         "You are a reasoning-focused competitive programming solver. "
@@ -386,6 +391,11 @@ class ReasoningAgentGenerationTask(GenerationTask):
                     elif success and sample:
                         # Sample tests passed - agent will retry based on tool message
                         self.dp_print(data_point, "sample tests passed, prompting agent for full submission")
+
+                        # Add assistant message and tool response to agent_messages
+                        agent_messages.append(msg)
+                        tool_msg = {"role": "tool", "content": tool_out, "tool_call_id": tool_call_id}
+                        agent_messages.append(tool_msg)
 
                         # Set flag to continue agent loop (retry agent turn)
                         continue_agent_loop = True
