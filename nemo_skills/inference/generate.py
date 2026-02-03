@@ -728,7 +728,89 @@ class GenerationTask:
                 fout.write(json.dumps(gen_dict) + "\n")
 
         Path(self.cfg.output_file + "-async").unlink()
+
+        # Clean up intermediate state file if it exists
+        intermediate_file = Path(self.get_intermediate_file_path())
+        if intermediate_file.exists():
+            intermediate_file.unlink()
+
         self.cleanup_litellm_cache()
+
+    def get_intermediate_file_path(self):
+        """Get the path to the intermediate state file."""
+        return self.cfg.output_file + "-intermediate.json"
+
+    def load_intermediate_state(self, async_position):
+        """Load intermediate state for a specific async position.
+
+        Args:
+            async_position: The async position key to load state for
+
+        Returns:
+            dict or None: The saved state dict, or None if not found
+        """
+        intermediate_file = self.get_intermediate_file_path()
+        if not Path(intermediate_file).exists():
+            return None
+
+        try:
+            with open(intermediate_file, "r", encoding="utf-8") as f:
+                all_states = json.load(f)
+            return all_states.get(str(async_position))
+        except (json.JSONDecodeError, IOError):
+            return None
+
+    def save_intermediate_state(self, async_position, state):
+        """Save intermediate state for a specific async position.
+
+        Args:
+            async_position: The async position key to save state for
+            state: dict containing the state to save
+        """
+        intermediate_file = self.get_intermediate_file_path()
+
+        # Load existing states
+        all_states = {}
+        if Path(intermediate_file).exists():
+            try:
+                with open(intermediate_file, "r", encoding="utf-8") as f:
+                    all_states = json.load(f)
+            except (json.JSONDecodeError, IOError):
+                all_states = {}
+
+        # Update state for this position
+        all_states[str(async_position)] = state
+
+        # Write back
+        with open(intermediate_file, "w", encoding="utf-8") as f:
+            json.dump(all_states, f, indent=2)
+
+    def clear_intermediate_state(self, async_position):
+        """Clear intermediate state for a specific async position.
+
+        Args:
+            async_position: The async position key to clear state for
+        """
+        intermediate_file = self.get_intermediate_file_path()
+        if not Path(intermediate_file).exists():
+            return
+
+        try:
+            with open(intermediate_file, "r", encoding="utf-8") as f:
+                all_states = json.load(f)
+
+            # Remove this position's state
+            if str(async_position) in all_states:
+                del all_states[str(async_position)]
+
+            # Write back or delete file if empty
+            if all_states:
+                with open(intermediate_file, "w", encoding="utf-8") as f:
+                    json.dump(all_states, f, indent=2)
+            else:
+                Path(intermediate_file).unlink()
+        except (json.JSONDecodeError, IOError):
+            pass
 
     def wait_for_server(self):
         if not self.cfg.server.get("base_url") and not self.cfg.server.get("host") and not self.cfg.server.get("port"):
