@@ -144,6 +144,9 @@ def _create_job_unified(
                     allocate_port=True,  # Always allocate port for sandbox
                     env_overrides=sandbox_env_overrides,
                 )
+                # Ensure sandbox runs on all nodes in the group (like the server does)
+                # This is critical for multi-node setups where client tasks need local sandbox access
+                sandbox_script.span_group_nodes = True
 
                 sandbox_cmd = Command(
                     script=sandbox_script,

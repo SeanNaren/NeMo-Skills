@@ -301,25 +301,40 @@ class ReasoningAgentGenerationTask(GenerationTask):
             data_point["subtask_score"] = "1"
 
         problem = data_point.get("question") or data_point.get("problem") or ""
-        self.dp_print(data_point, "start orchestration")
 
-        # Initialize agent conversation
-        agent_messages = [
-            {"role": "system", "content": self.cfg.agent_system_message},
-            {"role": "user", "content": f"Problem:\n{problem}"},
-        ]
+        # Load intermediate state if available
+        async_position = data_point.get(self.cfg.async_position_key)
+        saved_state = self.load_intermediate_state(async_position) if async_position is not None else None
+
+        if saved_state:
+            self.dp_print(data_point, f"resuming from iteration {saved_state['iteration']}")
+            # Restore state
+            agent_messages = saved_state["agent_messages"]
+            trace = saved_state["trace"]
+            num_agent_tokens = saved_state["num_agent_tokens"]
+            num_reasoner_tokens = saved_state["num_reasoner_tokens"]
+            previous_solution = saved_state["previous_solution"]
+            final_code = saved_state["final_code"]
+            out_of_context = saved_state["out_of_context"]
+            start_iteration = saved_state["iteration"]
+        else:
+            self.dp_print(data_point, "start orchestration")
+            # Initialize agent conversation
+            agent_messages = [
+                {"role": "system", "content": self.cfg.agent_system_message},
+                {"role": "user", "content": f"Problem:\n{problem}"},
+            ]
+            trace = []
+            num_agent_tokens, num_reasoner_tokens = [], []
+            final_code = ""
+            out_of_context = False
+            previous_solution = None
+            start_iteration = 0
 
         tools = self._build_tools()
-        trace = []
-        num_agent_tokens, num_reasoner_tokens = [], []
-        final_code = ""
-        out_of_context = False
-
-        # State tracking for reasoner calls
-        previous_solution = None
 
         # Agent orchestration loop
-        for iteration in range(self.cfg.max_steps):
+        for iteration in range(start_iteration, self.cfg.max_steps):
             self.dp_print(data_point, f"iteration {iteration + 1}/{self.cfg.max_steps}")
 
             # Agent decides what to do
@@ -449,6 +464,20 @@ class ReasoningAgentGenerationTask(GenerationTask):
                     agent_messages.append({"role": "tool", "content": tool_out, "tool_call_id": tool_call_id})
                     trace.append({"source": "tool", "role": "tool", "content": tool_out, "tool_call_id": tool_call_id})
 
+            # Save intermediate state after each iteration
+            if async_position is not None:
+                state = {
+                    "agent_messages": agent_messages,
+                    "trace": trace,
+                    "num_agent_tokens": num_agent_tokens,
+                    "num_reasoner_tokens": num_reasoner_tokens,
+                    "previous_solution": previous_solution,
+                    "final_code": final_code,
+                    "out_of_context": out_of_context,
+                    "iteration": iteration + 1,  # Save next iteration to start from
+                }
+                self.save_intermediate_state(async_position, state)
+
             # Check if we have a final solution
             if final_code:
                 break
@@ -460,7 +489,7 @@ class ReasoningAgentGenerationTask(GenerationTask):
 
         out = {
             "id": data_point["id"],
-            "generation": final_code,
+            "generation": "```cpp\n" + final_code + "\n```",
             "messages": trace,
             "num_generated_tokens": sum(num_agent_tokens) + sum(num_reasoner_tokens),
             "num_generated_tokens_list": {"agent": num_agent_tokens, "reasoner": num_reasoner_tokens},
@@ -469,6 +498,10 @@ class ReasoningAgentGenerationTask(GenerationTask):
         if out_of_context:
             out["error"] = "_ran_out_of_context_"
             self.dp_print(data_point, "stopped: out_of_context")
+
+        # Clear intermediate state when done (success or failure)
+        if async_position is not None:
+            self.clear_intermediate_state(async_position)
 
         return out
 
