@@ -3,6 +3,7 @@ import json
 import logging
 import re
 import sys
+import time
 from dataclasses import asdict, field
 from pathlib import Path
 
@@ -28,6 +29,7 @@ class ReasoningAgentConfig(GenerateSolutionsConfig):
     use_client_parsing: bool = False
     model_name: str | None = None
     max_steps: int = 10
+    max_time: str | None = None  # Format: "hh:mm:ss" (e.g., "03:45:00")
     explicit_feedback: bool = False
     avg_score: bool = True
     agent_system_message: str = (
@@ -193,6 +195,19 @@ class ReasoningAgentGenerationTask(GenerationTask):
         except Exception:
             return 0.0
 
+    def _parse_max_time(self, max_time_str: str | None) -> float | None:
+        """Parse max_time string (hh:mm:ss) into seconds."""
+        if not max_time_str:
+            return None
+        try:
+            parts = max_time_str.split(":")
+            if len(parts) != 3:
+                raise ValueError(f"Invalid max_time format: {max_time_str}. Expected hh:mm:ss")
+            hours, minutes, seconds = map(int, parts)
+            return hours * 3600 + minutes * 60 + seconds
+        except Exception as e:
+            raise ValueError(f"Invalid max_time format: {max_time_str}. Expected hh:mm:ss. Error: {e}")
+
     def _build_tools(self):
         """Build tools available to the orchestrator agent."""
         return [
@@ -302,6 +317,10 @@ class ReasoningAgentGenerationTask(GenerationTask):
 
         problem = data_point.get("question") or data_point.get("problem") or ""
 
+        # Parse max_time and track start time
+        max_time_seconds = self._parse_max_time(self.cfg.max_time)
+        start_time = time.time()
+
         # Load intermediate state if available
         async_position = data_point.get(self.cfg.async_position_key)
         saved_state = self.load_intermediate_state(async_position) if async_position is not None else None
@@ -335,6 +354,25 @@ class ReasoningAgentGenerationTask(GenerationTask):
 
         # Agent orchestration loop
         for iteration in range(start_iteration, self.cfg.max_steps):
+            # Check if max_time exceeded
+            if max_time_seconds is not None:
+                elapsed = time.time() - start_time
+                if elapsed >= max_time_seconds:
+                    self.dp_print(data_point, f"max_time reached ({elapsed:.1f}s >= {max_time_seconds}s)")
+                    if async_position is not None:
+                        state = {
+                            "agent_messages": agent_messages,
+                            "trace": trace,
+                            "num_agent_tokens": num_agent_tokens,
+                            "num_reasoner_tokens": num_reasoner_tokens,
+                            "previous_solution": previous_solution,
+                            "final_code": final_code,
+                            "out_of_context": out_of_context,
+                            "iteration": iteration,
+                        }
+                        self.save_intermediate_state(async_position, state)
+                    break
+
             self.dp_print(data_point, f"iteration {iteration + 1}/{self.cfg.max_steps}")
 
             # Agent decides what to do
