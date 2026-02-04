@@ -32,6 +32,7 @@ class ReasoningAgentConfig(GenerateSolutionsConfig):
     max_time: str | None = None  # Format: "hh:mm:ss" (e.g., "03:45:00")
     explicit_feedback: bool = False
     avg_score: bool = True
+    max_n: int = 5  # Maximum number of parallel solutions the reasoner can generate
     agent_system_message: str = (
         "You are an orchestration agent solving competitive programming problems.\n\n"
         "You have access to two tools:\n"
@@ -215,14 +216,18 @@ class ReasoningAgentGenerationTask(GenerationTask):
                 "type": "function",
                 "function": {
                     "name": "generate_solution",
-                    "description": "Ask the reasoner to generate or improve a C++17 solution. Use feedback parameter to describe what went wrong with previous solution.",
+                    "description": "Ask the reasoner to generate or improve a C++17 solution. Use feedback parameter to describe what went wrong with previous solution. Use n parameter to specify how many solutions you would like to generate in parallel (useful when the model finds it difficult to generate 1 solution).",
                     "parameters": {
                         "type": "object",
                         "properties": {
                             "feedback": {
                                 "type": "string",
                                 "description": "Brief feedback about what went wrong with previous solution (optional, only for improvements)",
-                            }
+                            },
+                            "n": {
+                                "type": "integer",
+                                "description": "Number of solutions to generate in parallel. Useful when the model finds it difficult to generate 1 solution.",
+                            },
                         },
                     },
                 },
@@ -301,6 +306,25 @@ class ReasoningAgentGenerationTask(GenerationTask):
                 "reasoning_content": result.get("reasoning_content", ""),
                 "num_generated_tokens": result.get("num_generated_tokens", 0),
             }
+
+    async def _summarize_progress(self, agent_messages: list[dict]) -> str:
+        """Generate a concise summary of attempts when context is exceeded."""
+        summary_prompt = (
+            "Summarize what we tried and what didn't work in 2-3 sentences. "
+            "Focus on key failures and patterns observed. Be concise."
+        )
+        summary_messages = agent_messages + [{"role": "user", "content": summary_prompt}]
+
+        try:
+            result = await self.llm.generate_async(
+                prompt=summary_messages,
+                include_response=False,
+                max_tokens=200,
+                temperature=0.0,
+            )
+            return result.get("generation", "").strip()
+        except Exception:
+            return "Previous attempts exhausted context window."
 
     async def process_single_datapoint(self, data_point, all_data):
         """Process a single datapoint using tool-based orchestration.
@@ -384,9 +408,29 @@ class ReasoningAgentGenerationTask(GenerationTask):
             # Agent decides what to do
             a = await self._agent_turn(agent_messages, tools)
             if a.get("message") is None:
-                self.dp_print(data_point, "agent: out_of_context")
-                out_of_context = True
-                break
+                self.dp_print(data_point, "agent: out_of_context, generating summary and restarting")
+
+                # Generate summary of what we tried
+                summary = await self._summarize_progress(agent_messages)
+                self.dp_print(data_point, f"summary: {summary[:100]}...")
+
+                # Restart conversation with summary as feedback
+                agent_messages = [
+                    {"role": "system", "content": self.cfg.agent_system_message},
+                    {
+                        "role": "user",
+                        "content": f"Problem:\n{problem}\n\nPrevious attempt summary:\n{summary}",
+                    },
+                ]
+                trace.append(
+                    {
+                        "source": "system",
+                        "role": "user",
+                        "content": f"Context reset. Summary: {summary}",
+                        "iteration": iteration,
+                    }
+                )
+                continue
 
             num_agent_tokens.append(a.get("num_generated_tokens", 0))
             msg = a["message"]
@@ -421,34 +465,86 @@ class ReasoningAgentGenerationTask(GenerationTask):
                 # ============================================================
                 if name == "generate_solution":
                     feedback = args.get("feedback")
-                    self.dp_print(data_point, f"tool: generate_solution(feedback={'yes' if feedback else 'no'})")
+                    n = args.get("n", 1)
 
-                    # Call reasoner
-                    result = await self._call_reasoner(problem, previous_solution, feedback)
-                    num_reasoner_tokens.append(result.get("num_generated_tokens", 0))
+                    # Validate n is within valid range [1, max_n]
+                    if not isinstance(n, int) or n < 1 or n > self.cfg.max_n:
+                        tool_out = json.dumps(
+                            {
+                                "error": f"Invalid n parameter: {n}. Must be an integer between 1 and {self.cfg.max_n}.",
+                                "status": "error",
+                            }
+                        )
+                        agent_messages.append({"role": "tool", "content": tool_out, "tool_call_id": tool_call_id})
+                        trace.append(
+                            {"source": "tool", "role": "tool", "content": tool_out, "tool_call_id": tool_call_id}
+                        )
+                        self.dp_print(data_point, f"error: invalid n={n}, must be 1-{self.cfg.max_n}")
+                        continue
 
-                    # Extract code
-                    code = self._extract_cpp(result.get("generation", ""))
-
-                    # Log to trace
-                    trace.append(
-                        {
-                            "source": "reasoner",
-                            "role": "assistant",
-                            "content": result.get("generation", ""),
-                            "reasoning_content": result.get("reasoning_content", ""),
-                            "feedback": feedback,
-                            "previous_solution": previous_solution,
-                        }
+                    self.dp_print(
+                        data_point, f"tool: generate_solution(feedback={'yes' if feedback else 'no'}, n={n})"
                     )
 
-                    if code:
-                        previous_solution = code
-                        tool_out = json.dumps({"code": code, "status": "success"})
-                        self.dp_print(data_point, f"reasoner: generated solution ({len(code)} chars)")
+                    # Call reasoner n times in parallel
+                    results = await asyncio.gather(
+                        *[self._call_reasoner(problem, previous_solution, feedback) for _ in range(n)]
+                    )
+
+                    # Track total tokens
+                    for result in results:
+                        num_reasoner_tokens.append(result.get("num_generated_tokens", 0))
+
+                    # Extract code from all results
+                    solutions = []
+                    for idx, result in enumerate(results):
+                        code = self._extract_cpp(result.get("generation", ""))
+                        solutions.append(
+                            {
+                                "code": code if code else None,
+                                "generation": result.get("generation", ""),
+                                "reasoning_content": result.get("reasoning_content", ""),
+                            }
+                        )
+
+                        # Log each reasoner call to trace
+                        trace.append(
+                            {
+                                "source": "reasoner",
+                                "role": "assistant",
+                                "content": result.get("generation", ""),
+                                "reasoning_content": result.get("reasoning_content", ""),
+                                "feedback": feedback,
+                                "previous_solution": previous_solution,
+                                "solution_index": idx + 1,
+                                "total_solutions": n,
+                            }
+                        )
+
+                    # Filter valid solutions
+                    valid_solutions = [s for s in solutions if s["code"] is not None]
+
+                    if valid_solutions:
+                        # Use the first valid solution as previous_solution
+                        previous_solution = valid_solutions[0]["code"]
+                        # Return all solutions
+                        tool_out = json.dumps(
+                            {
+                                "solutions": [s["code"] for s in valid_solutions],
+                                "status": "success",
+                                "count": len(valid_solutions),
+                            }
+                        )
+                        self.dp_print(
+                            data_point,
+                            f"reasoner: generated {len(valid_solutions)}/{n} valid solutions "
+                            f"({len(valid_solutions[0]['code'])} chars in first)",
+                        )
                     else:
-                        tool_out = json.dumps({"error": "No cpp code block found", "status": "error"})
-                        self.dp_print(data_point, "reasoner: failed to generate code block")
+                        tool_out = json.dumps(
+                            {"error": f"No cpp code block found in any of {n} generations", "status": "error"}
+                        )
+                        self.dp_print(data_point, f"reasoner: failed to generate code block in {n} attempts")
 
                     agent_messages.append({"role": "tool", "content": tool_out, "tool_call_id": tool_call_id})
                     trace.append({"source": "tool", "role": "tool", "content": tool_out, "tool_call_id": tool_call_id})
@@ -540,10 +636,6 @@ class ReasoningAgentGenerationTask(GenerationTask):
             "num_generated_tokens": sum(num_agent_tokens) + sum(num_reasoner_tokens),
             "num_generated_tokens_list": {"agent": num_agent_tokens, "reasoner": num_reasoner_tokens},
         }
-
-        if out_of_context:
-            out["error"] = "_ran_out_of_context_"
-            self.dp_print(data_point, "stopped: out_of_context")
 
         # Clear intermediate state when done (success or failure)
         if async_position is not None:
