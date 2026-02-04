@@ -277,6 +277,12 @@ class ReasoningAgentGenerationTask(GenerationTask):
                     f"Feedback: {feedback}\n\n"
                     f"Generate an improved solution. Return only a single ```cpp``` code block."
                 )
+            elif feedback:
+                user_content = (
+                    f"Problem:\n{problem}\n\n"
+                    f"Feedback: {feedback}\n\n"
+                    f"Generate a solution. Return only a single ```cpp``` code block."
+                )
             else:
                 # Initial solution mode
                 user_content = problem
@@ -431,6 +437,8 @@ class ReasoningAgentGenerationTask(GenerationTask):
                             "role": "assistant",
                             "content": result.get("generation", ""),
                             "reasoning_content": result.get("reasoning_content", ""),
+                            "feedback": feedback,
+                            "previous_solution": previous_solution,
                         }
                     )
 
