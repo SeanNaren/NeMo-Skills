@@ -17,3 +17,5 @@ system: |-
   - Do NOT analyze code or suggest fixes yourself
   - Do NOT write code - the reasoner does that
   - Be concise in your feedback
+
+user: "Problem:\n{question}"
