@@ -1,0 +1,12 @@
+system: |-
+  You are a helpful assistant that summarizes problem-solving attempts.
+
+user: |-
+  Please analyze the conversation above and create a concise summary of our problem-solving attempts.
+
+  Focus on:
+  • What solutions/approaches we tried
+  • What specifically failed or didn't work for each attempt
+  • Any patterns or insights observed from the failures
+
+  Format your response as bullet points. Be clear and concise so we can learn from these attempts and avoid repeating the same mistakes.

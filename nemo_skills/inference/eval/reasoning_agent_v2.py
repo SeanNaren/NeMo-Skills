@@ -34,6 +34,7 @@ class ReasoningAgentConfig(GenerateSolutionsConfig):
     avg_score: bool = True
     max_n: int = 5  # Maximum number of parallel solutions the reasoner can generate
     agent_prompt_config: str = "eval/ioi/agent/orchestrator"
+    summary_prompt_config: str = "eval/ioi/agent/summary"
     reasoner_prompt_config: str = "eval/ioi/agent/agent_tools_solver"
     reasoner_improve_prompt_config: str = "eval/ioi/agent/self_improve_feedback"
 
@@ -101,6 +102,7 @@ class ReasoningAgentGenerationTask(GenerationTask):
         super().__init__(cfg)
         self.message_parser = ClientMessageParser(cfg) if cfg.use_client_parsing else ServerMessageParser(cfg)
         self.agent_prompt = get_prompt(cfg.agent_prompt_config)
+        self.summary_prompt = get_prompt(cfg.summary_prompt_config)
         self.reasoner_prompt = get_prompt(cfg.reasoner_prompt_config)
         self.reasoner_improve_prompt = get_prompt(cfg.reasoner_improve_prompt_config)
 
@@ -289,18 +291,15 @@ class ReasoningAgentGenerationTask(GenerationTask):
 
     async def _summarize_progress(self, agent_messages: list[dict]) -> str:
         """Generate a concise summary of attempts when context is exceeded."""
-        summary_prompt = (
-            "Summarize what we tried and what didn't work in 2-3 sentences. "
-            "Focus on key failures and patterns observed. Be concise."
-        )
-        summary_messages = agent_messages + [{"role": "user", "content": summary_prompt}]
+        # Get summary prompt messages
+        summary_messages_template = self.summary_prompt.fill({})
+
+        # Replace system message and append user message for summary request
+        summary_messages = [summary_messages_template[0]] + agent_messages + [summary_messages_template[1]]
 
         try:
             result = await self.llm.generate_async(
-                prompt=summary_messages,
-                include_response=False,
-                max_tokens=200,
-                temperature=0.0,
+                prompt=summary_messages, include_response=False, **asdict(self.cfg.inference)
             )
             return result.get("generation", "").strip()
         except Exception:
