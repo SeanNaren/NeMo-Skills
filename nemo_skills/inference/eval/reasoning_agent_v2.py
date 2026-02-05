@@ -15,7 +15,7 @@ from nemo_skills.inference.eval.bfcl import ClientMessageParser, ServerMessagePa
 from nemo_skills.inference.generate import GenerateSolutionsConfig, GenerationTask, InferenceConfig
 from nemo_skills.inference.model import get_model, server_params
 from nemo_skills.inference.model.utils import is_context_window_exceeded_error
-from nemo_skills.prompt.utils import get_token_count
+from nemo_skills.prompt.utils import get_prompt, get_token_count
 from nemo_skills.utils import get_help_message, get_logger_name, nested_dataclass, setup_logging
 
 LOG = logging.getLogger(get_logger_name(__file__))
@@ -33,27 +33,9 @@ class ReasoningAgentConfig(GenerateSolutionsConfig):
     explicit_feedback: bool = False
     avg_score: bool = True
     max_n: int = 5  # Maximum number of parallel solutions the reasoner can generate
-    agent_system_message: str = (
-        "You are an orchestration agent solving competitive programming problems.\n\n"
-        "You have access to two tools:\n"
-        "1. generate_solution(feedback=None) - Ask the reasoner to generate or improve a C++17 solution\n"
-        "2. submit_solution(code, sample) - Submit a solution for evaluation\n\n"
-        "Workflow:\n"
-        "1. Call generate_solution() to get an initial solution\n"
-        "2. Call submit_solution(code, sample=true) to test on samples\n"
-        "3. If samples pass, call submit_solution(code, sample=false) for full tests\n"
-        "4. If tests fail, call generate_solution(feedback='brief description') to improve\n"
-        "5. Repeat until success or max iterations\n\n"
-        "Rules:\n"
-        "- Keep feedback to ONE sentence describing what failed\n"
-        "- Do NOT analyze code or suggest fixes yourself\n"
-        "- Do NOT write code - the reasoner does that\n"
-        "- Be concise in your feedback"
-    )
-    reasoner_system_message: str = (
-        "You are a competitive programming solver. "
-        "Return exactly one C++17 solution inside a single ```cpp``` code block."
-    )
+    agent_prompt_config: str = "eval/ioi/agent/orchestrator"
+    reasoner_prompt_config: str = "eval/ioi/agent/agent_tools_solver"
+    reasoner_improve_prompt_config: str = "eval/ioi/agent/self_improve_feedback"
 
     def __post_init__(self):
         base_url = self.server.get("base_url")
@@ -118,6 +100,9 @@ class ReasoningAgentGenerationTask(GenerationTask):
         self.reasoner_semaphore = None
         super().__init__(cfg)
         self.message_parser = ClientMessageParser(cfg) if cfg.use_client_parsing else ServerMessageParser(cfg)
+        self.agent_prompt = get_prompt(cfg.agent_prompt_config)
+        self.reasoner_prompt = get_prompt(cfg.reasoner_prompt_config)
+        self.reasoner_improve_prompt = get_prompt(cfg.reasoner_improve_prompt_config)
 
     def dp_print(self, data_point, *args):
         dp_id = data_point.get("id", "?") if isinstance(data_point, dict) else "?"
@@ -270,32 +255,27 @@ class ReasoningAgentGenerationTask(GenerationTask):
         parsed.update(return_dict)
         return parsed
 
-    async def _call_reasoner(self, problem: str, previous_solution: str | None, feedback: str | None) -> dict:
+    async def _call_reasoner(
+        self, problem: str, previous_solution: str | None, feedback: str | None, data_point: dict
+    ) -> dict:
         """Call reasoner to generate or improve solution."""
         async with self.reasoner_semaphore:
             # Build prompt based on context
-            if previous_solution and feedback:
-                # Improvement mode
-                user_content = (
-                    f"Problem:\n{problem}\n\n"
-                    f"Previous solution:\n```cpp\n{previous_solution}\n```\n\n"
-                    f"Feedback: {feedback}\n\n"
-                    f"Generate an improved solution. Return only a single ```cpp``` code block."
-                )
-            elif feedback:
-                user_content = (
-                    f"Problem:\n{problem}\n\n"
-                    f"Feedback: {feedback}\n\n"
-                    f"Generate a solution. Return only a single ```cpp``` code block."
+            if previous_solution:
+                # Use improve prompt with previous solution
+                messages = self.reasoner_improve_prompt.fill(
+                    {
+                        "subtask_score": data_point.get("subtask_score", "1"),
+                        "question": problem,
+                        "solution": previous_solution,
+                        "feedback": feedback or "",
+                    }
                 )
             else:
-                # Initial solution mode
-                user_content = problem
-
-            messages = [
-                {"role": "system", "content": self.cfg.reasoner_system_message},
-                {"role": "user", "content": user_content},
-            ]
+                # Use default generate prompt
+                messages = self.reasoner_prompt.fill(
+                    {"subtask_score": data_point.get("subtask_score", "1"), "question": problem}
+                )
 
             result = await self.reasoner_llm.generate_async(
                 prompt=messages, include_response=False, **asdict(self.cfg.inference_reasoner)
@@ -345,7 +325,7 @@ class ReasoningAgentGenerationTask(GenerationTask):
         if data_point.get("subtask_score") is None:
             data_point["subtask_score"] = "1"
 
-        problem = data_point.get("question") or data_point.get("problem") or ""
+        problem = data_point["question"]
 
         # Parse max_time and track start time
         max_time_seconds = self._parse_max_time(self.cfg.max_time)
@@ -370,7 +350,7 @@ class ReasoningAgentGenerationTask(GenerationTask):
             self.dp_print(data_point, "start orchestration")
             # Initialize agent conversation
             agent_messages = [
-                {"role": "system", "content": self.cfg.agent_system_message},
+                {"role": "system", "content": self.agent_prompt.config.system},
                 {"role": "user", "content": f"Problem:\n{problem}"},
             ]
             trace = []
@@ -416,7 +396,7 @@ class ReasoningAgentGenerationTask(GenerationTask):
 
                 # Restart conversation with summary as feedback
                 agent_messages = [
-                    {"role": "system", "content": self.cfg.agent_system_message},
+                    {"role": "system", "content": self.agent_prompt.config.system},
                     {
                         "role": "user",
                         "content": f"Problem:\n{problem}\n\nPrevious attempt summary:\n{summary}",
@@ -488,7 +468,7 @@ class ReasoningAgentGenerationTask(GenerationTask):
 
                     # Call reasoner n times in parallel
                     results = await asyncio.gather(
-                        *[self._call_reasoner(problem, previous_solution, feedback) for _ in range(n)]
+                        *[self._call_reasoner(problem, previous_solution, feedback, data_point) for _ in range(n)]
                     )
 
                     # Track total tokens
@@ -574,13 +554,26 @@ class ReasoningAgentGenerationTask(GenerationTask):
                     }
                     eval_result = await self.evaluator.eval_single(eval_payload)
                     test_case_results = eval_result.get("test_case_results", {})
+
+                    # For IOI, extract the relevant subtask
+                    is_ioi = "ioi_id" in data_point
+                    if is_ioi and "subtask" in data_point:
+                        subtask_name = data_point["subtask"]
+                        if subtask_name in test_case_results:
+                            test_case_results = {subtask_name: test_case_results[subtask_name]}
+
                     normalized = self._normalize_scores(test_case_results)
 
                     # Build tool response
                     if self.cfg.explicit_feedback:
                         tool_out_dict = eval_result
                     else:
-                        subtask_scores = {k: v["score"] for k, v in normalized.items()}
+                        if is_ioi and "subtask_score" in data_point:
+                            # For IOI, report score as "actual/max"
+                            max_score = data_point["subtask_score"]
+                            subtask_scores = {k: f"{v['score']}/{max_score}" for k, v in normalized.items()}
+                        else:
+                            subtask_scores = {k: v["score"] for k, v in normalized.items()}
                         tool_out_dict = {"subtask_scores": subtask_scores}
 
                     if self.cfg.avg_score:
