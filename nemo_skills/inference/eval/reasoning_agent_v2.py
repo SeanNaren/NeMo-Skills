@@ -32,7 +32,6 @@ class ReasoningAgentConfig(GenerateSolutionsConfig):
     max_time: str | None = None  # Format: "hh:mm:ss" (e.g., "03:45:00")
     explicit_feedback: bool = False
     avg_score: bool = True
-    max_n: int = 5  # Maximum number of parallel solutions the reasoner can generate
     agent_prompt_config: str = "eval/ioi/agent/orchestrator"
     summary_prompt_config: str = "eval/ioi/agent/summary"
     reasoner_prompt_config: str = "eval/ioi/agent/agent_tools_solver"
@@ -203,7 +202,7 @@ class ReasoningAgentGenerationTask(GenerationTask):
                 "type": "function",
                 "function": {
                     "name": "generate_solution",
-                    "description": "Ask the reasoner to generate or improve a C++17 solution. Use feedback parameter to describe what went wrong with previous solution. Use n parameter to specify how many solutions you would like to generate in parallel (useful when the model finds it difficult to generate 1 solution).",
+                    "description": "Ask the reasoner to generate or improve a C++17 solution. Use feedback to describe what went wrong. Use instructions to enforce a specific algorithm or approach.",
                     "parameters": {
                         "type": "object",
                         "properties": {
@@ -211,9 +210,9 @@ class ReasoningAgentGenerationTask(GenerationTask):
                                 "type": "string",
                                 "description": "Brief feedback about what went wrong with previous solution (optional, only for improvements)",
                             },
-                            "n": {
-                                "type": "integer",
-                                "description": "Number of solutions to generate in parallel. Useful when the model finds it difficult to generate 1 solution.",
+                            "instructions": {
+                                "type": "string",
+                                "description": "Strict instructions for the reasoner about what approach/algorithm to use. These override the reasoner's default behavior.",
                             },
                         },
                     },
@@ -258,7 +257,12 @@ class ReasoningAgentGenerationTask(GenerationTask):
         return parsed
 
     async def _call_reasoner(
-        self, problem: str, previous_solution: str | None, feedback: str | None, data_point: dict
+        self,
+        problem: str,
+        previous_solution: str | None,
+        feedback: str | None,
+        instructions: str | None,
+        data_point: dict,
     ) -> dict:
         """Call reasoner to generate or improve solution."""
         async with self.reasoner_semaphore:
@@ -279,6 +283,16 @@ class ReasoningAgentGenerationTask(GenerationTask):
                     {"subtask_score": data_point.get("subtask_score", "1"), "question": problem}
                 )
 
+            # Inject agent instructions into the system message so the reasoner
+            # treats them as high-priority directives (not optional feedback).
+            if instructions and messages and messages[0].get("role") == "system":
+                messages[0]["content"] += (
+                    "\n\n### STRICT INSTRUCTIONS ###\n"
+                    "You MUST follow these instructions when creating your solution. They take priority over your default approach.\n\n"
+                    f"{instructions}"
+                )
+                self.dp_print(data_point, f"Injected instructions into reasoner prompt: {instructions}")
+
             result = await self.reasoner_llm.generate_async(
                 prompt=messages, include_response=False, **asdict(self.cfg.inference_reasoner)
             )
@@ -288,6 +302,134 @@ class ReasoningAgentGenerationTask(GenerationTask):
                 "reasoning_content": result.get("reasoning_content", ""),
                 "num_generated_tokens": result.get("num_generated_tokens", 0),
             }
+
+    async def _execute_generate_solution(
+        self, problem: str, previous_solution: str | None, args: dict, data_point: dict, tool_call_id
+    ) -> dict:
+        """Execute a generate_solution tool call. Returns results without mutating shared state."""
+        feedback = args.get("feedback")
+        instructions = args.get("instructions")
+        n_attempts = 5
+
+        self.dp_print(
+            data_point,
+            f"tool: generate_solution(feedback={'yes' if feedback else 'no'}, "
+            f"instructions={'yes' if instructions else 'no'})",
+        )
+
+        results = await asyncio.gather(
+            *[
+                self._call_reasoner(problem, previous_solution, feedback, instructions, data_point)
+                for _ in range(n_attempts)
+            ]
+        )
+
+        first_valid_code = None
+        trace_entries = []
+        reasoner_tokens = []
+
+        for idx, result in enumerate(results):
+            code = self._extract_cpp(result.get("generation", ""))
+            reasoner_tokens.append(result.get("num_generated_tokens", 0))
+            trace_entries.append(
+                {
+                    "source": "reasoner",
+                    "role": "assistant",
+                    "content": result.get("generation", ""),
+                    "reasoning_content": result.get("reasoning_content", ""),
+                    "feedback": feedback,
+                    "instructions": instructions,
+                    "previous_solution": previous_solution,
+                    "solution_index": idx + 1,
+                    "total_solutions": n_attempts,
+                }
+            )
+            if code and first_valid_code is None:
+                first_valid_code = code
+
+        if first_valid_code:
+            tool_out = json.dumps({"solution": first_valid_code, "status": "success"})
+            self.dp_print(data_point, f"reasoner: found valid solution ({len(first_valid_code)} chars)")
+        else:
+            tool_out = json.dumps(
+                {"error": f"No cpp code block found in any of {n_attempts} generations", "status": "error"}
+            )
+            self.dp_print(data_point, f"reasoner: failed to generate code block in {n_attempts} attempts")
+
+        return {
+            "name": "generate_solution",
+            "tool_call_id": tool_call_id,
+            "tool_out": tool_out,
+            "trace_entries": trace_entries,
+            "reasoner_tokens": reasoner_tokens,
+            "first_valid_code": first_valid_code,
+        }
+
+    async def _execute_submit_solution(self, args: dict, data_point: dict, tool_call_id) -> dict:
+        """Execute a submit_solution tool call. Returns results without mutating shared state."""
+        code = args.get("code", "")
+        sample = bool(args.get("sample", False))
+
+        if not code:
+            tool_out = json.dumps({"error": "No code provided"})
+            self.dp_print(data_point, "tool: submit_solution — no code provided")
+            return {
+                "name": "submit_solution",
+                "tool_call_id": tool_call_id,
+                "tool_out": tool_out,
+                "trace_entries": [],
+                "final_code": None,
+            }
+
+        self.dp_print(data_point, f"tool: submit_solution(sample={sample}, code_len={len(code)})")
+
+        eval_payload = {
+            **data_point,
+            "generation": f"```cpp\n{code}\n```",
+            "only_sample_tests": sample,
+        }
+        eval_result = await self.evaluator.eval_single(eval_payload)
+        test_case_results = eval_result.get("test_case_results", {})
+
+        is_ioi = "ioi_id" in data_point
+        if is_ioi and "subtask" in data_point:
+            subtask_name = data_point["subtask"]
+            if subtask_name in test_case_results:
+                test_case_results = {subtask_name: test_case_results[subtask_name]}
+
+        normalized = self._normalize_scores(test_case_results)
+
+        if self.cfg.explicit_feedback:
+            tool_out_dict = eval_result
+        else:
+            if is_ioi and "subtask_score" in data_point:
+                max_score = data_point["subtask_score"]
+                subtask_scores = {k: f"{v['score']}/{max_score}" for k, v in normalized.items()}
+            else:
+                subtask_scores = {k: v["score"] for k, v in normalized.items()}
+            tool_out_dict = {"subtask_scores": subtask_scores}
+
+        if self.cfg.avg_score:
+            tool_out_dict["avg_score"] = self._calculate_avg_score(normalized)
+
+        success = bool(normalized) and all(float(v["score"]) == 1.0 for v in normalized.values())
+        tool_out_dict["success"] = success
+
+        tool_out = json.dumps(tool_out_dict)
+        self.dp_print(data_point, f"result: success={success}")
+
+        final_code = None
+        if success and not sample:
+            final_code = code
+            self.dp_print(data_point, "✓ solution accepted")
+
+        return {
+            "name": "submit_solution",
+            "tool_call_id": tool_call_id,
+            "tool_out": tool_out,
+            "trace_entries": [],
+            "final_code": final_code,
+        }
 
     async def _summarize_progress(self, agent_messages: list[dict]) -> str:
         """Generate a concise summary of attempts when context is exceeded."""
@@ -427,11 +569,11 @@ class ReasoningAgentGenerationTask(GenerationTask):
                 self.dp_print(data_point, "agent: no tool calls")
                 break
 
-            # Execute each tool call
+            # Build coroutines for all tool calls to execute in parallel
+            coros = []
             for gen, tool_call_id in zip(tool_calls, tool_call_ids or [None] * len(tool_calls)):
                 (name, raw_args) = next(iter(gen.items()))
 
-                # Parse arguments
                 args = raw_args
                 if isinstance(raw_args, str):
                     try:
@@ -439,164 +581,42 @@ class ReasoningAgentGenerationTask(GenerationTask):
                     except Exception:
                         args = {}
 
-                # ============================================================
-                # TOOL: generate_solution
-                # ============================================================
                 if name == "generate_solution":
-                    feedback = args.get("feedback")
-                    n = args.get("n", 1)
-
-                    # Validate n is within valid range [1, max_n]
-                    if not isinstance(n, int) or n < 1 or n > self.cfg.max_n:
-                        tool_out = json.dumps(
-                            {
-                                "error": f"Invalid n parameter: {n}. Must be an integer between 1 and {self.cfg.max_n}.",
-                                "status": "error",
-                            }
-                        )
-                        agent_messages.append({"role": "tool", "content": tool_out, "tool_call_id": tool_call_id})
-                        trace.append(
-                            {"source": "tool", "role": "tool", "content": tool_out, "tool_call_id": tool_call_id}
-                        )
-                        self.dp_print(data_point, f"error: invalid n={n}, must be 1-{self.cfg.max_n}")
-                        continue
-
-                    self.dp_print(
-                        data_point, f"tool: generate_solution(feedback={'yes' if feedback else 'no'}, n={n})"
+                    coros.append(
+                        self._execute_generate_solution(problem, previous_solution, args, data_point, tool_call_id)
                     )
-
-                    # Call reasoner n times in parallel
-                    results = await asyncio.gather(
-                        *[self._call_reasoner(problem, previous_solution, feedback, data_point) for _ in range(n)]
-                    )
-
-                    # Track total tokens
-                    for result in results:
-                        num_reasoner_tokens.append(result.get("num_generated_tokens", 0))
-
-                    # Extract code from all results
-                    solutions = []
-                    for idx, result in enumerate(results):
-                        code = self._extract_cpp(result.get("generation", ""))
-                        solutions.append(
-                            {
-                                "code": code if code else None,
-                                "generation": result.get("generation", ""),
-                                "reasoning_content": result.get("reasoning_content", ""),
-                            }
-                        )
-
-                        # Log each reasoner call to trace
-                        trace.append(
-                            {
-                                "source": "reasoner",
-                                "role": "assistant",
-                                "content": result.get("generation", ""),
-                                "reasoning_content": result.get("reasoning_content", ""),
-                                "feedback": feedback,
-                                "previous_solution": previous_solution,
-                                "solution_index": idx + 1,
-                                "total_solutions": n,
-                            }
-                        )
-
-                    # Filter valid solutions
-                    valid_solutions = [s for s in solutions if s["code"] is not None]
-
-                    if valid_solutions:
-                        # Use the first valid solution as previous_solution
-                        previous_solution = valid_solutions[0]["code"]
-                        # Return all solutions
-                        tool_out = json.dumps(
-                            {
-                                "solutions": [s["code"] for s in valid_solutions],
-                                "status": "success",
-                                "count": len(valid_solutions),
-                            }
-                        )
-                        self.dp_print(
-                            data_point,
-                            f"reasoner: generated {len(valid_solutions)}/{n} valid solutions "
-                            f"({len(valid_solutions[0]['code'])} chars in first)",
-                        )
-                    else:
-                        tool_out = json.dumps(
-                            {"error": f"No cpp code block found in any of {n} generations", "status": "error"}
-                        )
-                        self.dp_print(data_point, f"reasoner: failed to generate code block in {n} attempts")
-
-                    agent_messages.append({"role": "tool", "content": tool_out, "tool_call_id": tool_call_id})
-                    trace.append({"source": "tool", "role": "tool", "content": tool_out, "tool_call_id": tool_call_id})
-
-                # ============================================================
-                # TOOL: submit_solution
-                # ============================================================
                 elif name == "submit_solution":
-                    code = args.get("code", "")
-                    sample = bool(args.get("sample", False))
-
-                    if not code:
-                        tool_out = json.dumps({"error": "No code provided"})
-                        agent_messages.append({"role": "tool", "content": tool_out, "tool_call_id": tool_call_id})
-                        trace.append(
-                            {"source": "tool", "role": "tool", "content": tool_out, "tool_call_id": tool_call_id}
-                        )
-                        continue
-
-                    self.dp_print(data_point, f"tool: submit_solution(sample={sample}, code_len={len(code)})")
-
-                    # Execute evaluation
-                    eval_payload = {
-                        **data_point,
-                        "generation": f"```cpp\n{code}\n```",
-                        "only_sample_tests": sample,
-                    }
-                    eval_result = await self.evaluator.eval_single(eval_payload)
-                    test_case_results = eval_result.get("test_case_results", {})
-
-                    # For IOI, extract the relevant subtask
-                    is_ioi = "ioi_id" in data_point
-                    if is_ioi and "subtask" in data_point:
-                        subtask_name = data_point["subtask"]
-                        if subtask_name in test_case_results:
-                            test_case_results = {subtask_name: test_case_results[subtask_name]}
-
-                    normalized = self._normalize_scores(test_case_results)
-
-                    # Build tool response
-                    if self.cfg.explicit_feedback:
-                        tool_out_dict = eval_result
-                    else:
-                        if is_ioi and "subtask_score" in data_point:
-                            # For IOI, report score as "actual/max"
-                            max_score = data_point["subtask_score"]
-                            subtask_scores = {k: f"{v['score']}/{max_score}" for k, v in normalized.items()}
-                        else:
-                            subtask_scores = {k: v["score"] for k, v in normalized.items()}
-                        tool_out_dict = {"subtask_scores": subtask_scores}
-
-                    if self.cfg.avg_score:
-                        tool_out_dict["avg_score"] = self._calculate_avg_score(normalized)
-
-                    success = bool(normalized) and all(float(v["score"]) == 1.0 for v in normalized.values())
-                    tool_out_dict["success"] = success
-
-                    tool_out = json.dumps(tool_out_dict)
-                    agent_messages.append({"role": "tool", "content": tool_out, "tool_call_id": tool_call_id})
-                    trace.append({"source": "tool", "role": "tool", "content": tool_out, "tool_call_id": tool_call_id})
-
-                    self.dp_print(data_point, f"result: success={success}")
-
-                    # Check if we're done
-                    if success and not sample:
-                        final_code = code
-                        self.dp_print(data_point, "✓ solution accepted")
-
-                # Unknown tool
+                    coros.append(self._execute_submit_solution(args, data_point, tool_call_id))
                 else:
-                    tool_out = json.dumps({"error": f"Unknown tool: {name}"})
-                    agent_messages.append({"role": "tool", "content": tool_out, "tool_call_id": tool_call_id})
-                    trace.append({"source": "tool", "role": "tool", "content": tool_out, "tool_call_id": tool_call_id})
+
+                    async def _unknown_tool(n=name, tid=tool_call_id):
+                        tool_out = json.dumps({"error": f"Unknown tool: {n}"})
+                        return {"name": n, "tool_call_id": tid, "tool_out": tool_out, "trace_entries": []}
+
+                    coros.append(_unknown_tool())
+
+            # Execute all tool calls in parallel
+            tool_results = await asyncio.gather(*coros)
+
+            # Apply results in original order
+            for result in tool_results:
+                # Append reasoner trace entries (before the tool response)
+                trace.extend(result.get("trace_entries", []))
+
+                # Append tool response to conversation and trace
+                tool_msg = {"role": "tool", "content": result["tool_out"], "tool_call_id": result["tool_call_id"]}
+                agent_messages.append(tool_msg)
+                trace.append({"source": "tool", **tool_msg})
+
+                # Apply state from generate_solution
+                if result["name"] == "generate_solution":
+                    num_reasoner_tokens.extend(result.get("reasoner_tokens", []))
+                    if result.get("first_valid_code"):
+                        previous_solution = result["first_valid_code"]
+
+                # Apply state from submit_solution
+                elif result["name"] == "submit_solution" and result.get("final_code"):
+                    final_code = result["final_code"]
 
             # Save intermediate state after each iteration
             if async_position is not None:
