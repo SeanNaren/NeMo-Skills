@@ -309,7 +309,6 @@ class ReasoningAgentGenerationTask(GenerationTask):
         """Execute a generate_solution tool call. Returns results without mutating shared state."""
         feedback = args.get("feedback")
         instructions = args.get("instructions")
-        n_attempts = 5
 
         self.dp_print(
             data_point,
@@ -317,44 +316,28 @@ class ReasoningAgentGenerationTask(GenerationTask):
             f"instructions={'yes' if instructions else 'no'})",
         )
 
-        results = await asyncio.gather(
-            *[
-                self._call_reasoner(problem, previous_solution, feedback, instructions, data_point)
-                for _ in range(n_attempts)
-            ]
-        )
+        result = await self._call_reasoner(problem, previous_solution, feedback, instructions, data_point)
 
-        first_valid_code = None
-        trace_entries = []
-        reasoner_tokens = []
+        code = self._extract_cpp(result.get("generation", ""))
+        reasoner_tokens = [result.get("num_generated_tokens", 0)]
+        trace_entries = [
+            {
+                "source": "reasoner",
+                "role": "assistant",
+                "content": result.get("generation", ""),
+                "reasoning_content": result.get("reasoning_content", ""),
+                "feedback": feedback,
+                "instructions": instructions,
+                "previous_solution": previous_solution,
+            }
+        ]
 
-        for idx, result in enumerate(results):
-            code = self._extract_cpp(result.get("generation", ""))
-            reasoner_tokens.append(result.get("num_generated_tokens", 0))
-            trace_entries.append(
-                {
-                    "source": "reasoner",
-                    "role": "assistant",
-                    "content": result.get("generation", ""),
-                    "reasoning_content": result.get("reasoning_content", ""),
-                    "feedback": feedback,
-                    "instructions": instructions,
-                    "previous_solution": previous_solution,
-                    "solution_index": idx + 1,
-                    "total_solutions": n_attempts,
-                }
-            )
-            if code and first_valid_code is None:
-                first_valid_code = code
-
-        if first_valid_code:
-            tool_out = json.dumps({"solution": first_valid_code, "status": "success"})
-            self.dp_print(data_point, f"reasoner: found valid solution ({len(first_valid_code)} chars)")
+        if code:
+            tool_out = json.dumps({"solution": code, "status": "success"})
+            self.dp_print(data_point, f"reasoner: found valid solution ({len(code)} chars)")
         else:
-            tool_out = json.dumps(
-                {"error": f"No cpp code block found in any of {n_attempts} generations", "status": "error"}
-            )
-            self.dp_print(data_point, f"reasoner: failed to generate code block in {n_attempts} attempts")
+            tool_out = json.dumps({"error": "No cpp code block found in generation", "status": "error"})
+            self.dp_print(data_point, "reasoner: failed to generate code block")
 
         return {
             "name": "generate_solution",
@@ -362,7 +345,7 @@ class ReasoningAgentGenerationTask(GenerationTask):
             "tool_out": tool_out,
             "trace_entries": trace_entries,
             "reasoner_tokens": reasoner_tokens,
-            "first_valid_code": first_valid_code,
+            "first_valid_code": code,
         }
 
     async def _execute_submit_solution(self, args: dict, data_point: dict, tool_call_id) -> dict:
