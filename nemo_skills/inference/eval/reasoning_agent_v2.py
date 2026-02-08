@@ -395,7 +395,11 @@ class ReasoningAgentGenerationTask(GenerationTask):
         if self.cfg.avg_score:
             tool_out_dict["avg_score"] = self._calculate_avg_score(normalized)
 
-        success = bool(normalized) and all(float(v["score"]) == 1.0 for v in normalized.values())
+        if is_ioi and "subtask_score" in data_point:
+            max_score = float(data_point["subtask_score"])
+            success = bool(normalized) and all(float(v["score"]) == max_score for v in normalized.values())
+        else:
+            success = bool(normalized) and all(float(v["score"]) == 1.0 for v in normalized.values())
         tool_out_dict["success"] = success
 
         tool_out = json.dumps(tool_out_dict)
