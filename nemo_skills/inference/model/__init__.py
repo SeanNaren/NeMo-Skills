@@ -19,6 +19,15 @@ from nemo_skills.utils import python_doc_to_cmd_help
 
 # NIM models (speech)
 from .asr_nim import ASRNIMModel
+
+# Audio utilities
+from .audio_utils import (
+    audio_file_to_base64,
+    chunk_audio,
+    load_audio_file,
+    make_audio_content_block,
+    save_audio_chunk_to_base64,
+)
 from .azure import AzureOpenAIModel
 
 # Base classes
@@ -84,7 +93,7 @@ def get_model(server_type, tokenizer=None, model_class: str | None = None, **kwa
 
 def get_code_execution_model(server_type, tokenizer=None, code_execution=None, sandbox=None, **kwargs):
     """A helper function to make it easier to set server through cmd."""
-    model = get_model(server_type=server_type, tokenizer=tokenizer, **kwargs)
+    model = get_model(server_type=server_type, tokenizer=tokenizer, require_tokenizer=True, **kwargs)
     if code_execution is None:
         code_execution = {}
     code_execution_config = CodeExecutionConfig(**code_execution)
@@ -125,6 +134,7 @@ def get_tool_calling_model(
     tool_modules: list[str] | None = None,
     tool_overrides: dict | None = None,
     schema_overrides: dict | None = None,
+    max_tool_calls: int = -1,
     **kwargs,
 ):
     if isinstance(model, str):
@@ -135,6 +145,7 @@ def get_tool_calling_model(
         tool_overrides=tool_overrides,
         additional_config=additional_config,
         schema_overrides=schema_overrides,
+        max_tool_calls=max_tool_calls,
     )
 
 

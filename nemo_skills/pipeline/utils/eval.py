@@ -54,15 +54,24 @@ class BenchmarkArgs:
         return bool(self.judge_args or self.judge_pipeline_args)
 
 
-def combine_cmds(cmds: list[str], single_node_mode: str) -> str:
-    """Combine multiple eval commands into a single eval cmd."""
-    if single_node_mode == "sequential":
-        return " && ".join(cmds)
-    elif single_node_mode == "parallel":
-        if len(cmds) == 1:
-            return cmds[0]
-        return " & ".join(f"( {cmd} )" for cmd in cmds) + " & wait "
-    raise ValueError(f"Unknown single_node_mode: {single_node_mode}")
+@dataclass
+class EvalGenerationUnit:
+    """Parameters for a single generation invocation used during eval batching.
+
+    This is intentionally kept as a simple dataclass so scripts can build the final
+    commands at runtime (after heterogeneous hostname refs are resolved).
+    """
+
+    output_dir: str
+    input_file: str
+    extra_arguments: str
+    random_seed: int | None
+    chunk_id: int | None
+    num_chunks: int | None
+    script: str
+    requirements: list[str] | None
+    wandb_parameters: dict | None
+    with_sandbox: bool
 
 
 def get_arg_from_module_or_dict(module, arg_name, default_value=None, override_dict=None):
@@ -256,11 +265,9 @@ def prepare_eval_commands(
     num_chunks,
     chunk_ids,
     rerun_done,
-    server_parameters,
     extra_arguments,
     data_dir,
     extra_datasets_type,
-    exclusive,
     with_sandbox,
     keep_mounts_for_sandbox,
     wandb_parameters,
@@ -268,14 +275,16 @@ def prepare_eval_commands(
     generation_type=None,
     generation_module=None,
 ):
-    # TODO: there is a bit too much code duplication here and logic is quite dense, should try to refactor
+    """Prepare per-job eval generation units for evaluation batching.
 
-    # TODO: should we allow setting num chunks per benchmark when not using groups? Maybe benchmark:rs_num:num_chunks?
-
+    Returns:
+        benchmarks_dict: Mapping benchmark name -> BenchmarkArgs (includes job_ids, remaining_jobs, etc.)
+        job_batches: List of tuples:
+            (job_units, job_benchmarks, job_needs_sandbox, job_needs_sandbox_to_keep_mounts, job_sandbox_env_overrides)
+    """
     if generation_type is not None:
         if generation_module is not None:
             raise ValueError("Cannot specify both generation_module and generation_type. ")
-
         generation_module = GENERATION_MODULE_MAP[generation_type]
 
     benchmarks_or_groups = {
@@ -286,12 +295,11 @@ def prepare_eval_commands(
 
     if num_jobs is None:
         if cluster_config["executor"] == "slurm":
-            num_jobs = -1  # -1 means run all benchmarks in parallel
+            num_jobs = -1
         else:
-            # for local executor, it makes no sense to use other values
             num_jobs = 1
 
-    benchmarks_dict = {}  # benchmark_name -> benchmark_args
+    benchmarks_dict = {}
     for benchmark_or_group, rs_num in benchmarks_or_groups.items():
         cur_benchmarks = add_default_args(
             cluster_config,
@@ -341,7 +349,6 @@ def prepare_eval_commands(
         if num_chunks:
             benchmark_args.num_chunks = num_chunks
         if benchmark_args.num_chunks is not None:
-            # TODO: currently using global chunk_ids but local num_chunks. That's not ideal
             benchmark_chunk_ids = compute_chunk_ids(chunk_ids, benchmark_args.num_chunks)
         if benchmark_chunk_ids is None:
             benchmark_chunk_ids = [None]
@@ -353,11 +360,10 @@ def prepare_eval_commands(
             chunk_ids=benchmark_chunk_ids,
             rerun_done=rerun_done,
         )
-        for seed_idx, (seed, benchmark_chunk_ids) in enumerate(benchmark_args.remaining_jobs.items()):
+        for _, benchmark_chunk_ids in benchmark_args.remaining_jobs.items():
             total_evals += len(benchmark_chunk_ids)
 
     if num_jobs < 0:
-        # if num_jobs is -1, we run all benchmarks in parallel
         num_jobs = total_evals
 
     if num_jobs == 0:
@@ -371,16 +377,9 @@ def prepare_eval_commands(
         eval_to_job_map.extend([i] * count)
 
     cur_job_idx = 0
-    get_random_port = pipeline_utils.should_get_random_port(server_parameters["server_gpus"], exclusive)
-    job_server_config, job_server_address, job_extra_arguments = pipeline_utils.configure_client(
-        **server_parameters,
-        extra_arguments=extra_arguments,
-        get_random_port=get_random_port,
-    )
-
     cur_eval = 0
     job_batches = []
-    job_cmds = []
+    job_units: list[EvalGenerationUnit] = []
     job_benchmarks = set()
 
     for benchmark, benchmark_args in benchmarks_dict.items():
@@ -392,7 +391,6 @@ def prepare_eval_commands(
         benchmark_output_dir = f"{output_dir}/{benchmark_args.eval_subfolder}"
         for seed_idx, (seed, benchmark_chunk_ids) in enumerate(benchmark_args.remaining_jobs.items()):
             if wandb_parameters:
-                # no need for chunks as it will run after merging
                 wandb_parameters["samples_file"] = pipeline_utils.get_chunked_rs_filename(
                     benchmark_output_dir,
                     random_seed=seed,
@@ -415,6 +413,7 @@ def prepare_eval_commands(
                         "Please provide a valid generation module."
                     )
                 generation_task = generation_task.GENERATION_TASK_CLASS
+                requirements = generation_task.get_generation_requirements()
                 if (
                     generation_task.get_server_command_fn.__func__ != GenerationTask.get_server_command_fn.__func__
                     and num_jobs != total_evals
@@ -427,29 +426,30 @@ def prepare_eval_commands(
                 full_extra_arguments = (
                     f"{generation_task.get_generation_default_args()} "
                     f"{benchmark_args.generation_args} "
-                    f"{job_extra_arguments} "
+                    f"{extra_arguments} "
                 )
 
-                cmd = pipeline_utils.get_generation_cmd(
-                    input_file=benchmark_args.input_file,
-                    output_dir=benchmark_output_dir,
-                    extra_arguments=full_extra_arguments,
-                    random_seed=seed,
-                    chunk_id=chunk_id,
-                    num_chunks=benchmark_args.num_chunks,
-                    script=generation_module or benchmark_args.generation_module,
-                    # only logging for the first seed
-                    wandb_parameters=wandb_parameters if seed_idx == 0 else None,
-                    with_sandbox=benchmark_args.requires_sandbox,
+                job_units.append(
+                    EvalGenerationUnit(
+                        input_file=benchmark_args.input_file,
+                        output_dir=benchmark_output_dir,
+                        extra_arguments=full_extra_arguments,
+                        random_seed=seed,
+                        chunk_id=chunk_id,
+                        num_chunks=benchmark_args.num_chunks,
+                        script=generation_module or benchmark_args.generation_module,
+                        requirements=requirements,
+                        wandb_parameters=wandb_parameters if seed_idx == 0 else None,
+                        with_sandbox=benchmark_args.requires_sandbox,
+                    )
                 )
-                job_cmds.append(cmd)
 
                 if cur_eval == total_evals - 1 or cur_job_idx != eval_to_job_map[cur_eval + 1]:
                     job_needs_sandbox = any(benchmarks_dict[b].requires_sandbox for b in job_benchmarks)
                     job_needs_sandbox_to_keep_mounts = any(
                         benchmarks_dict[b].keep_mounts_for_sandbox for b in job_benchmarks
                     )
-                    # Aggregate per-job sandbox env overrides from participating benchmarks (first key wins)
+
                     ordered_benchmarks = [b for b in benchmarks_dict.keys() if b in job_benchmarks]
                     env_map: Dict[str, str] = {}
                     env_source: Dict[str, str] = {}
@@ -466,29 +466,19 @@ def prepare_eval_commands(
                             env_source[key] = b
                     job_sandbox_env_overrides = [f"{k}={v}" for k, v in env_map.items()]
 
-                    # TODO: move to a dataclass
                     job_batches.append(
                         (
-                            job_cmds,
+                            job_units,
                             job_benchmarks,
                             job_needs_sandbox,
                             job_needs_sandbox_to_keep_mounts,
-                            job_server_config,
-                            job_server_address,
-                            # a check above guarantees that this is the same for all tasks in a job
-                            generation_task.get_server_command_fn(),
                             job_sandbox_env_overrides,
                         )
-                    )
-                    job_server_config, job_server_address, job_extra_arguments = pipeline_utils.configure_client(
-                        **server_parameters,
-                        extra_arguments=extra_arguments,
-                        get_random_port=get_random_port,
                     )
                     for job_benchmark in job_benchmarks:
                         benchmarks_dict[job_benchmark].job_ids.append(cur_job_idx)
                     cur_job_idx += 1
-                    job_cmds = []
+                    job_units = []
                     job_benchmarks = set()
 
                 cur_eval += 1
