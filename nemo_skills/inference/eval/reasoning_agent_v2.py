@@ -12,7 +12,7 @@ from omegaconf import ListConfig
 
 from nemo_skills.code_execution.sandbox import get_sandbox
 from nemo_skills.inference.eval.bfcl import ClientMessageParser, ServerMessageParser
-from nemo_skills.inference.generate import GenerateSolutionsConfig, GenerationTask, InferenceConfig
+from nemo_skills.inference.generate import GenerationTask, GenerationTaskConfig, InferenceConfig
 from nemo_skills.inference.model import get_model, server_params
 from nemo_skills.inference.model.utils import is_context_window_exceeded_error
 from nemo_skills.prompt.utils import get_prompt, get_token_count
@@ -22,7 +22,7 @@ LOG = logging.getLogger(get_logger_name(__file__))
 
 
 @nested_dataclass(kw_only=True)
-class ReasoningAgentConfig(GenerateSolutionsConfig):
+class ReasoningAgentConfig(GenerationTaskConfig):
     inference: InferenceConfig = field(default_factory=InferenceConfig)  # agent (orchestrator)
     inference_reasoner: InferenceConfig = field(default_factory=InferenceConfig)  # reasoner
     server: dict = field(default_factory=dict)
