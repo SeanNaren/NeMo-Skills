@@ -414,7 +414,7 @@ class ReasoningAgentGenerationTask(GenerationTask):
             "name": "submit_solution",
             "tool_call_id": tool_call_id,
             "tool_out": tool_out,
-            "trace_entries": [],
+            "trace_entries": [{"source": "evaluator", "eval_result": eval_result, "code": code, "sample": sample}],
             "final_code": final_code,
         }
 
