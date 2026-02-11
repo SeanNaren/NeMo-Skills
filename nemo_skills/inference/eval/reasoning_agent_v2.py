@@ -31,6 +31,7 @@ class ReasoningAgentConfig(GenerationTaskConfig):
     max_steps: int = 10
     max_time: str | None = None  # Format: "hh:mm:ss" (e.g., "03:45:00")
     explicit_feedback: bool = False
+    max_limit_in_test_output: int = 1000
     avg_score: bool = True
     agent_prompt_config: str = "eval/ioi/agent/orchestrator"
     summary_prompt_config: str = "eval/ioi/agent/summary"
@@ -181,6 +182,37 @@ class ReasoningAgentGenerationTask(GenerationTask):
             return float(passed / total)
         except Exception:
             return 0.0
+
+    def _filter_test_outputs(self, test_case_results: dict) -> dict:
+        """Remove passed tests and truncate stdout/stderr in outputs."""
+        max_len = self.cfg.max_limit_in_test_output
+
+        def truncate(val):
+            if isinstance(val, str) and len(val) > max_len:
+                return val[:max_len] + "...<truncated>"
+            return val
+
+        def filter_outputs(outputs):
+            return [
+                {
+                    k: truncate(v) if k in ("run_stdout", "run_stderr", "compile_stdout", "compile_stderr") else v
+                    for k, v in o.items()
+                }
+                for o in outputs
+                if float(o.get("score", 0.0)) != 1.0
+            ]
+
+        # ICPC-style: flat dict with outputs list
+        if (
+            isinstance(test_case_results, dict)
+            and "outputs" in test_case_results
+            and "score" in test_case_results
+            and isinstance(test_case_results.get("outputs"), list)
+        ):
+            return {**test_case_results, "outputs": filter_outputs(test_case_results["outputs"])}
+
+        # IOI-style: dict of subtasks
+        return {k: {**v, "outputs": filter_outputs(v.get("outputs", []))} for k, v in test_case_results.items()}
 
     def _parse_max_time(self, max_time_str: str | None) -> float | None:
         """Parse max_time string (hh:mm:ss) into seconds."""
@@ -383,7 +415,7 @@ class ReasoningAgentGenerationTask(GenerationTask):
         normalized = self._normalize_scores(test_case_results)
 
         if self.cfg.explicit_feedback:
-            tool_out_dict = eval_result
+            tool_out_dict = {**eval_result, "test_case_results": self._filter_test_outputs(test_case_results)}
         else:
             if is_ioi and "subtask_score" in data_point:
                 max_score = data_point["subtask_score"]
