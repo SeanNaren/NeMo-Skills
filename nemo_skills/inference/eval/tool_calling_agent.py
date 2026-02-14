@@ -7,9 +7,8 @@ from dataclasses import asdict, field
 
 import hydra
 
-from nemo_skills.code_execution.sandbox import get_sandbox
 from nemo_skills.inference.generate import GenerationTask, GenerationTaskConfig, InferenceConfig
-from nemo_skills.inference.model import get_model, server_params
+from nemo_skills.inference.model import server_params
 from nemo_skills.inference.model.utils import is_context_window_exceeded_error
 from nemo_skills.prompt.utils import get_prompt
 from nemo_skills.utils import get_help_message, get_logger_name, nested_dataclass, setup_logging
@@ -58,22 +57,6 @@ class ToolCallingAgentTask(GenerationTask):
 
     def log_example_prompt(self, data):
         return
-
-    def setup_llm(self):
-        self.sandbox = get_sandbox(**self.cfg.sandbox) if self.cfg.sandbox else None
-        output_dir = str(__import__("pathlib").Path(self.cfg.output_file).parent)
-
-        address = self.cfg.server.get("base_url", "")
-        model_name = self.cfg.server.get("model", "")
-        server_type = self.cfg.server.get("server_type", "openai")
-
-        if not address.startswith(("http://", "https://")):
-            address = f"http://{address}"
-        if not address.endswith("/v1"):
-            address = f"{address}/v1"
-
-        self.llm = get_model(server_type=server_type, model=model_name, base_url=address, output_dir=output_dir)
-        return self.llm
 
     def _extract_cpp(self, text: str | None) -> str | None:
         if not text:
