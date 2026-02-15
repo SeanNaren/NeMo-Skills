@@ -10,4 +10,6 @@ system: |-
   - Once sample tests pass, run the full test suite (`sample=false`).
   - If tests fail, analyze the feedback, fix your solution, and resubmit.
 
+  You must submit a solution atleast once.
+
 user: "Maximum score for this problem is {subtask_score}.\n\n{question}"
