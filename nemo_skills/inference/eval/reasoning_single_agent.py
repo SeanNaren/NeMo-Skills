@@ -380,6 +380,22 @@ class ReasoningSingleAgentTask(GenerationTask):
         except Exception:
             return "Previous attempts exhausted context window."
 
+    def _init_state(self, data_point):
+        """Initialize fresh loop state for a data point."""
+        problem = data_point["question"]
+        return {
+            "agent_messages": [
+                {"role": "system", "content": self.agent_prompt.config.system},
+                {"role": "user", "content": f"Problem:\n{problem}"},
+            ],
+            "trace": [],
+            "num_agent_tokens": [],
+            "num_reasoner_tokens": [],
+            "final_code": "",
+            "previous_solution": None,
+            "step": 0,
+        }
+
     async def process_single_datapoint(self, data_point, all_data):
         if self.evaluator is None:
             raise ValueError(
@@ -394,18 +410,29 @@ class ReasoningSingleAgentTask(GenerationTask):
         max_time_seconds = self._parse_max_time(self.cfg.max_time)
         start_time = time.time()
 
-        agent_messages = [
-            {"role": "system", "content": self.agent_prompt.config.system},
-            {"role": "user", "content": f"Problem:\n{problem}"},
-        ]
-        trace = []
-        num_agent_tokens, num_reasoner_tokens = [], []
-        final_code = ""
-        previous_solution = None
+        # Load intermediate state if available
+        async_position = data_point.get(self.cfg.async_position_key)
+        saved_state = self.load_intermediate_state(async_position) if async_position is not None else None
 
-        for step in range(self.cfg.max_steps):
+        if saved_state:
+            self.dp_print(data_point, f"resuming from step {saved_state['step']}")
+            s = saved_state
+        else:
+            self.dp_print(data_point, "start")
+            s = self._init_state(data_point)
+
+        agent_messages = s["agent_messages"]
+        trace = s["trace"]
+        num_agent_tokens = s["num_agent_tokens"]
+        num_reasoner_tokens = s["num_reasoner_tokens"]
+        final_code = s["final_code"]
+        previous_solution = s["previous_solution"]
+
+        for step in range(s["step"], self.cfg.max_steps):
             if max_time_seconds is not None and (time.time() - start_time) >= max_time_seconds:
                 self.dp_print(data_point, f"max_time reached at step {step}")
+                if async_position is not None:
+                    self._save_state(async_position, step, locals())
                 break
 
             self.dp_print(data_point, f"step {step + 1}/{self.cfg.max_steps}")
@@ -502,12 +529,20 @@ class ReasoningSingleAgentTask(GenerationTask):
                 elif tr["name"] == "submit_solution" and tr.get("final_code"):
                     final_code = tr["final_code"]
 
+            # Save intermediate state after each step
+            if async_position is not None:
+                self._save_state(async_position, step + 1, locals())
+
             if final_code:
                 break
 
         if not final_code and previous_solution:
             final_code = previous_solution
             self.dp_print(data_point, "using last generated solution")
+
+        # Clear intermediate state when done
+        if async_position is not None:
+            self.clear_intermediate_state(async_position)
 
         return {
             "id": data_point["id"],
@@ -516,6 +551,19 @@ class ReasoningSingleAgentTask(GenerationTask):
             "num_generated_tokens": sum(num_agent_tokens) + sum(num_reasoner_tokens),
             "num_generated_tokens_list": {"agent": num_agent_tokens, "reasoner": num_reasoner_tokens},
         }
+
+    def _save_state(self, async_position, step, local_vars):
+        """Save intermediate state for resume."""
+        state = {
+            "agent_messages": local_vars["agent_messages"],
+            "trace": local_vars["trace"],
+            "num_agent_tokens": local_vars["num_agent_tokens"],
+            "num_reasoner_tokens": local_vars["num_reasoner_tokens"],
+            "final_code": local_vars["final_code"],
+            "previous_solution": local_vars["previous_solution"],
+            "step": step,
+        }
+        self.save_intermediate_state(async_position, state)
 
 
 GENERATION_TASK_CLASS = ReasoningSingleAgentTask
