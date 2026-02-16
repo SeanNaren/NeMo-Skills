@@ -261,8 +261,17 @@ class SwarmAgentTask(GenerationTask):
             "num_generated_tokens": out.get("num_generated_tokens", 0),
         }
 
-    async def _execute_submit(self, code: str, sample: bool, data_point: dict) -> tuple[str, bool]:
-        """Run submission evaluation and return (tool_output_json, accepted)."""
+    async def _execute_submit(
+        self, code: str, sample: bool, data_point: dict, submission_counts: dict
+    ) -> tuple[str, bool]:
+        """Run submission evaluation and return (tool_output_json, accepted).
+
+        Also increments submission_counts['sample'] or submission_counts['full'].
+        """
+        if sample:
+            submission_counts["sample"] = submission_counts.get("sample", 0) + 1
+        else:
+            submission_counts["full"] = submission_counts.get("full", 0) + 1
         eval_payload = {
             **data_point,
             "generation": f"```cpp\n{code}\n```",
@@ -322,6 +331,7 @@ class SwarmAgentTask(GenerationTask):
         data_point: dict,
         start_time: float,
         max_time_seconds: float | None,
+        submission_counts: dict,
     ) -> dict:
         """Run a sub-agent loop: the sub-agent generates code and iterates using submit_solution."""
         full_system_prompt = self._build_subagent_system_prompt(system_prompt)
@@ -382,7 +392,7 @@ class SwarmAgentTask(GenerationTask):
                         data_point,
                         f"  subagent '{agent_name}' step {step + 1}: submit_solution(sample={sample})",
                     )
-                    tool_out, accepted = await self._execute_submit(code, sample, data_point)
+                    tool_out, accepted = await self._execute_submit(code, sample, data_point, submission_counts)
                     if accepted:
                         final_code = code
                         self.dp_print(data_point, f"  subagent '{agent_name}' step {step + 1}: ACCEPTED")
@@ -431,21 +441,52 @@ class SwarmAgentTask(GenerationTask):
         max_time_seconds = self._parse_max_time(self.cfg.max_time)
         start_time = time.time()
 
-        agent_messages = [
-            {"role": "system", "content": self.agent_prompt.config.system},
-            {"role": "user", "content": f"Problem:\n{problem}"},
-        ]
-        trace = []
-        num_orchestrator_tokens = []
-        num_subagent_tokens = []
-        final_code = ""
-        last_code = None
-        # Registry of created sub-agents: name -> system_prompt
-        subagents = {}
+        # Load intermediate state if available
+        async_position = data_point.get(self.cfg.async_position_key)
+        saved_state = self.load_intermediate_state(async_position) if async_position is not None else None
 
-        for step in range(self.cfg.max_steps):
+        if saved_state:
+            self.dp_print(data_point, f"resuming from step {saved_state['step']}")
+            agent_messages = saved_state["agent_messages"]
+            trace = saved_state["trace"]
+            num_orchestrator_tokens = saved_state["num_orchestrator_tokens"]
+            num_subagent_tokens = saved_state["num_subagent_tokens"]
+            final_code = saved_state["final_code"]
+            last_code = saved_state["last_code"]
+            subagents = saved_state["subagents"]
+            submission_counts = saved_state["submission_counts"]
+            start_step = saved_state["step"]
+        else:
+            self.dp_print(data_point, "start orchestration")
+            agent_messages = [
+                {"role": "system", "content": self.agent_prompt.config.system},
+                {"role": "user", "content": f"Problem:\n{problem}"},
+            ]
+            trace = []
+            num_orchestrator_tokens = []
+            num_subagent_tokens = []
+            final_code = ""
+            last_code = None
+            subagents = {}
+            submission_counts = {"sample": 0, "full": 0}
+            start_step = 0
+
+        for step in range(start_step, self.cfg.max_steps):
             if max_time_seconds is not None and (time.time() - start_time) >= max_time_seconds:
                 self.dp_print(data_point, f"max_time reached at step {step}")
+                if async_position is not None:
+                    self._save_state(
+                        async_position,
+                        step,
+                        agent_messages,
+                        trace,
+                        num_orchestrator_tokens,
+                        num_subagent_tokens,
+                        final_code,
+                        last_code,
+                        subagents,
+                        submission_counts,
+                    )
                 break
 
             self.dp_print(data_point, f"step {step + 1}/{self.cfg.max_steps}")
@@ -549,7 +590,6 @@ class SwarmAgentTask(GenerationTask):
                         system_prompt = subagents.get(agent_name, "")
 
                         if not system_prompt:
-                            # Agent not found, return error synchronously
                             tool_out = json.dumps({"error": f"Agent '{agent_name}' not found. Create it first."})
                             tool_msg = {"role": "tool", "content": tool_out, "tool_call_id": tc_id}
                             agent_messages.append(tool_msg)
@@ -559,7 +599,13 @@ class SwarmAgentTask(GenerationTask):
                         self.dp_print(data_point, f"assign_task to '{agent_name}': {task_prompt[:80]}...")
                         coros.append(
                             self._run_subagent(
-                                agent_name, system_prompt, task_prompt, data_point, start_time, max_time_seconds
+                                agent_name,
+                                system_prompt,
+                                task_prompt,
+                                data_point,
+                                start_time,
+                                max_time_seconds,
+                                submission_counts,
                             )
                         )
                         coro_ids.append(tc_id)
@@ -578,8 +624,8 @@ class SwarmAgentTask(GenerationTask):
 
                         self.dp_print(data_point, f"submit_solution(sample={sample}, code_len={len(code)})")
 
-                        async def _do_submit(c=code, s=sample, dp=data_point):
-                            tool_out_str, accepted = await self._execute_submit(c, s, dp)
+                        async def _do_submit(c=code, s=sample, dp=data_point, sc=submission_counts):
+                            tool_out_str, accepted = await self._execute_submit(c, s, dp, sc)
                             return {"tool_out": tool_out_str, "accepted": accepted, "code": c}
 
                         coros.append(_do_submit())
@@ -591,7 +637,6 @@ class SwarmAgentTask(GenerationTask):
 
                     for (coro_name, agent_name), tc_id, res in zip(coro_names, coro_ids, results):
                         if coro_name == "assign_task":
-                            # Sub-agent returned
                             subagent_result = res
                             trace.extend(subagent_result.get("trace", []))
                             num_subagent_tokens.extend(subagent_result.get("num_tokens", []))
@@ -601,6 +646,7 @@ class SwarmAgentTask(GenerationTask):
 
                             if sa_final:
                                 tool_out = json.dumps({"status": "success", "solution": sa_final, "agent": agent_name})
+                                final_code = sa_final
                                 last_code = sa_final
                             elif sa_last:
                                 tool_out = json.dumps({"status": "partial", "solution": sa_last, "agent": agent_name})
@@ -632,6 +678,21 @@ class SwarmAgentTask(GenerationTask):
                         agent_messages.append(tool_msg)
                         trace.append({"source": "tool", **tool_msg})
 
+            # Save intermediate state after each orchestrator step
+            if async_position is not None:
+                self._save_state(
+                    async_position,
+                    step + 1,
+                    agent_messages,
+                    trace,
+                    num_orchestrator_tokens,
+                    num_subagent_tokens,
+                    final_code,
+                    last_code,
+                    subagents,
+                    submission_counts,
+                )
+
             if final_code:
                 break
 
@@ -639,13 +700,50 @@ class SwarmAgentTask(GenerationTask):
             final_code = last_code
             self.dp_print(data_point, "using last available solution")
 
+        self.dp_print(
+            data_point,
+            f"done: submissions(sample={submission_counts['sample']}, full={submission_counts['full']})",
+        )
+
+        # Clear intermediate state when done
+        if async_position is not None:
+            self.clear_intermediate_state(async_position)
+
         return {
             "id": data_point["id"],
             "generation": f"```cpp\n{final_code}\n```",
             "messages": trace,
             "num_generated_tokens": sum(num_orchestrator_tokens) + sum(num_subagent_tokens),
             "num_generated_tokens_list": {"orchestrator": num_orchestrator_tokens, "subagent": num_subagent_tokens},
+            "num_submissions": submission_counts,
         }
+
+    def _save_state(
+        self,
+        async_position,
+        step,
+        agent_messages,
+        trace,
+        num_orchestrator_tokens,
+        num_subagent_tokens,
+        final_code,
+        last_code,
+        subagents,
+        submission_counts,
+    ):
+        """Save intermediate state for resume."""
+        state = {
+            "agent_messages": agent_messages,
+            "trace": trace,
+            "num_orchestrator_tokens": num_orchestrator_tokens,
+            "num_subagent_tokens": num_subagent_tokens,
+            "final_code": final_code,
+            "last_code": last_code,
+            "subagents": subagents,
+            "submission_counts": submission_counts,
+            "step": step,
+        }
+        self.save_intermediate_state(async_position, state)
 
 
 GENERATION_TASK_CLASS = SwarmAgentTask
