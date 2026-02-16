@@ -80,7 +80,7 @@ class SwarmAgentConfig(GenerationTaskConfig):
     inference: InferenceConfig = field(default_factory=InferenceConfig)
     inference_subagent: InferenceConfig = field(default_factory=InferenceConfig)
     server: dict = field(default_factory=dict)
-    max_steps: int = 15
+    max_steps: int = 100
     max_subagent_steps: int = 10
     max_time: str | None = None  # Format: "hh:mm:ss"
     explicit_feedback: bool = False
@@ -486,11 +486,22 @@ class SwarmAgentTask(GenerationTask):
             tool_call_ids = result.get("tool_call_ids", [])
 
             if not tool_calls:
-                self.dp_print(data_point, "no tool calls, ending")
                 # Check if orchestrator produced code directly
                 code = self._extract_cpp(msg.get("content", ""))
                 if code:
                     last_code = code
+
+                if not final_code:
+                    # No successful submission yet - nudge the orchestrator to keep going
+                    nudge = (
+                        "We still do not have a successful submitted solution. "
+                        "Please continue till we reach a successfully submitted solution that passes all tests."
+                    )
+                    self.dp_print(data_point, f"no tool calls, nudging orchestrator (step {step + 1})")
+                    nudge_msg = {"role": "user", "content": nudge}
+                    agent_messages.append(nudge_msg)
+                    trace.append({"source": "system", **nudge_msg})
+                    continue
                 break
 
             # Separate tool calls into sync (create_subagent) and async (assign_task, submit_solution)
