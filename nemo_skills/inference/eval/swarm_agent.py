@@ -419,12 +419,10 @@ class SwarmAgentTask(GenerationTask):
             if final_code:
                 break
 
-        if not final_code and last_code:
-            final_code = last_code
-
         return {
-            "final_code": final_code,
+            "accepted_code": final_code,
             "last_code": last_code,
+            "accepted": final_code is not None,
             "trace": trace,
             "num_tokens": num_tokens,
         }
@@ -667,15 +665,20 @@ class SwarmAgentTask(GenerationTask):
                             trace.extend(subagent_result.get("trace", []))
                             num_subagent_tokens.extend(subagent_result.get("num_tokens", []))
 
-                            sa_final = subagent_result.get("final_code")
+                            sa_accepted = subagent_result.get("accepted", False)
+                            sa_accepted_code = subagent_result.get("accepted_code")
                             sa_last = subagent_result.get("last_code")
 
-                            if sa_final:
-                                tool_out = json.dumps({"status": "success", "solution": sa_final, "agent": agent_name})
-                                final_code = sa_final
-                                last_code = sa_final
+                            if sa_accepted and sa_accepted_code:
+                                tool_out = json.dumps(
+                                    {"status": "accepted", "solution": sa_accepted_code, "agent": agent_name}
+                                )
+                                final_code = sa_accepted_code
+                                last_code = sa_accepted_code
                             elif sa_last:
-                                tool_out = json.dumps({"status": "partial", "solution": sa_last, "agent": agent_name})
+                                tool_out = json.dumps(
+                                    {"status": "not_accepted", "solution": sa_last, "agent": agent_name}
+                                )
                                 last_code = sa_last
                             else:
                                 tool_out = json.dumps(
@@ -689,7 +692,7 @@ class SwarmAgentTask(GenerationTask):
                             self.dp_print(
                                 data_point,
                                 f"subagent '{agent_name}' returned: "
-                                f"final={'yes' if sa_final else 'no'}, last={'yes' if sa_last else 'no'}",
+                                f"accepted={'yes' if sa_accepted else 'no'}, code={'yes' if sa_last else 'no'}",
                             )
 
                         elif coro_name == "submit_solution":
