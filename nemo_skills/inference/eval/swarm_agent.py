@@ -81,7 +81,7 @@ class SwarmAgentConfig(GenerationTaskConfig):
     inference_subagent: InferenceConfig = field(default_factory=InferenceConfig)
     server: dict = field(default_factory=dict)
     max_steps: int = 15
-    max_subagent_steps: int = 50
+    max_subagent_steps: int = 10
     max_time: str | None = None  # Format: "hh:mm:ss"
     explicit_feedback: bool = False
     max_limit_in_test_output: int = 1000
@@ -176,10 +176,14 @@ class SwarmAgentTask(GenerationTask):
         return hours * 3600 + minutes * 60 + seconds
 
     def _get_orchestrator_inference_params(self):
-        """Get inference params for the orchestrator (thinking disabled)."""
+        """Get inference params for the orchestrator.
+
+        Does not force thinking on or off - lets the server/config handle it.
+        Forcing thinking=False caused some models (e.g. Kimi K2.5) to emit
+        raw tool-call tokens as text instead of using the tool-calling API.
+        """
         params = asdict(self.cfg.inference)
         extra_body = dict(params.get("extra_body", {}) or {})
-        extra_body["chat_template_kwargs"] = {"thinking": False}
         params["extra_body"] = extra_body
         return params
 
@@ -297,12 +301,32 @@ class SwarmAgentTask(GenerationTask):
 
         return json.dumps(tool_out_dict), success and not sample
 
+    def _build_subagent_system_prompt(self, user_system_prompt: str) -> str:
+        """Augment the user-provided sub-agent system prompt with tool instructions."""
+        tool_instructions = (
+            "\n\n# Tools\n"
+            "You have access to a `submit_solution` tool that compiles and runs C++17 code against test cases.\n"
+            "- Call submit_solution(code, sample=true) to quickly test on sample inputs.\n"
+            "- If samples pass, call submit_solution(code, sample=false) to run full tests.\n"
+            "- If tests fail, analyze the feedback, fix your code, and resubmit.\n"
+            "- You MUST use submit_solution to test your code. Do NOT just output code in text.\n"
+            "- Iterate until you get a fully passing solution or run out of steps."
+        )
+        return user_system_prompt + tool_instructions
+
     async def _run_subagent(
-        self, system_prompt: str, task_prompt: str, data_point: dict, start_time: float, max_time_seconds: float | None
+        self,
+        agent_name: str,
+        system_prompt: str,
+        task_prompt: str,
+        data_point: dict,
+        start_time: float,
+        max_time_seconds: float | None,
     ) -> dict:
         """Run a sub-agent loop: the sub-agent generates code and iterates using submit_solution."""
+        full_system_prompt = self._build_subagent_system_prompt(system_prompt)
         messages = [
-            {"role": "system", "content": system_prompt},
+            {"role": "system", "content": full_system_prompt},
             {"role": "user", "content": task_prompt},
         ]
         trace = []
@@ -312,10 +336,14 @@ class SwarmAgentTask(GenerationTask):
 
         for step in range(self.cfg.max_subagent_steps):
             if max_time_seconds is not None and (time.time() - start_time) >= max_time_seconds:
+                self.dp_print(data_point, f"  subagent '{agent_name}' step {step + 1}: max_time reached")
                 break
+
+            self.dp_print(data_point, f"  subagent '{agent_name}' step {step + 1}/{self.cfg.max_subagent_steps}")
 
             result = await self._subagent_turn(messages)
             if result["message"] is None:
+                self.dp_print(data_point, f"  subagent '{agent_name}' step {step + 1}: context exceeded")
                 break
 
             num_tokens.append(result.get("num_generated_tokens", 0))
@@ -334,6 +362,11 @@ class SwarmAgentTask(GenerationTask):
                 code = self._extract_cpp(msg.get("content", ""))
                 if code:
                     last_code = code
+                    self.dp_print(
+                        data_point, f"  subagent '{agent_name}' step {step + 1}: produced code in text (no tool call)"
+                    )
+                else:
+                    self.dp_print(data_point, f"  subagent '{agent_name}' step {step + 1}: no tool calls and no code")
                 break
 
             for tc, tc_id in zip(tool_calls, tool_call_ids):
@@ -345,9 +378,14 @@ class SwarmAgentTask(GenerationTask):
                     sample = bool(args.get("sample", False))
                     if code:
                         last_code = code
+                    self.dp_print(
+                        data_point,
+                        f"  subagent '{agent_name}' step {step + 1}: submit_solution(sample={sample})",
+                    )
                     tool_out, accepted = await self._execute_submit(code, sample, data_point)
                     if accepted:
                         final_code = code
+                        self.dp_print(data_point, f"  subagent '{agent_name}' step {step + 1}: ACCEPTED")
                 else:
                     tool_out = json.dumps({"error": f"Unknown tool: {name}"})
 
@@ -509,7 +547,9 @@ class SwarmAgentTask(GenerationTask):
 
                         self.dp_print(data_point, f"assign_task to '{agent_name}': {task_prompt[:80]}...")
                         coros.append(
-                            self._run_subagent(system_prompt, task_prompt, data_point, start_time, max_time_seconds)
+                            self._run_subagent(
+                                agent_name, system_prompt, task_prompt, data_point, start_time, max_time_seconds
+                            )
                         )
                         coro_ids.append(tc_id)
                         coro_names.append(("assign_task", agent_name))
