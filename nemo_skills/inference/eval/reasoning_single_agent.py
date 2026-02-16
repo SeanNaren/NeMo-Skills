@@ -453,7 +453,25 @@ class ReasoningSingleAgentTask(GenerationTask):
             coros = []
             for tc, tc_id in zip(tool_calls, tool_call_ids):
                 name, raw_args = next(iter(tc.items()))
-                args = raw_args if isinstance(raw_args, dict) else json.loads(raw_args) if raw_args else {}
+                if isinstance(raw_args, dict):
+                    args = raw_args
+                elif raw_args:
+                    try:
+                        args = json.loads(raw_args)
+                    except json.JSONDecodeError:
+                        self.dp_print(data_point, f"malformed tool args for {name}, skipping")
+                        args = None
+                else:
+                    args = {}
+
+                if args is None:
+                    tool_out = json.dumps({"error": "Malformed tool call arguments"})
+
+                    async def _bad_args(tout=tool_out, tid=tc_id):
+                        return {"name": "error", "tool_call_id": tid, "tool_out": tout, "trace_entries": []}
+
+                    coros.append(_bad_args())
+                    continue
 
                 if name == "generate_solution":
                     coros.append(self._execute_generate_solution(problem, previous_solution, args, data_point, tc_id))

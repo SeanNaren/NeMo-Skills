@@ -381,7 +381,20 @@ class SwarmAgentTask(GenerationTask):
 
             for tc, tc_id in zip(tool_calls, tool_call_ids):
                 name, raw_args = next(iter(tc.items()))
-                args = raw_args if isinstance(raw_args, dict) else json.loads(raw_args) if raw_args else {}
+                if isinstance(raw_args, dict):
+                    args = raw_args
+                elif raw_args:
+                    try:
+                        args = json.loads(raw_args)
+                    except json.JSONDecodeError:
+                        self.dp_print(data_point, f"  subagent '{agent_name}' step {step + 1}: malformed tool args")
+                        tool_out = json.dumps({"error": "Malformed tool call arguments"})
+                        tool_msg = {"role": "tool", "content": tool_out, "tool_call_id": tc_id}
+                        messages.append(tool_msg)
+                        trace.append({"source": "tool", **tool_msg})
+                        continue
+                else:
+                    args = {}
 
                 if name == "submit_solution":
                     code = args.get("code", "")
@@ -551,7 +564,20 @@ class SwarmAgentTask(GenerationTask):
 
             for tc, tc_id in zip(tool_calls, tool_call_ids):
                 name, raw_args = next(iter(tc.items()))
-                args = raw_args if isinstance(raw_args, dict) else json.loads(raw_args) if raw_args else {}
+                if isinstance(raw_args, dict):
+                    args = raw_args
+                elif raw_args:
+                    try:
+                        args = json.loads(raw_args)
+                    except json.JSONDecodeError:
+                        self.dp_print(data_point, f"malformed tool args for {name}, skipping")
+                        tool_out = json.dumps({"error": "Malformed tool call arguments"})
+                        tool_msg = {"role": "tool", "content": tool_out, "tool_call_id": tc_id}
+                        agent_messages.append(tool_msg)
+                        trace.append({"source": "tool", **tool_msg})
+                        continue
+                else:
+                    args = {}
 
                 if name == "create_subagent":
                     sync_calls.append((tc_id, name, args))
