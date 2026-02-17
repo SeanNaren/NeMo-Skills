@@ -11,6 +11,7 @@ import hydra
 from omegaconf import ListConfig
 
 from nemo_skills.code_execution.sandbox import get_sandbox
+from nemo_skills.inference.eval.agent_utils import parse_max_time, process_submission_result
 from nemo_skills.inference.eval.bfcl import ClientMessageParser, ServerMessageParser
 from nemo_skills.inference.generate import GenerationTask, GenerationTaskConfig, InferenceConfig
 from nemo_skills.inference.model import get_model, server_params
@@ -139,7 +140,7 @@ class ReasoningAgentGenerationTask(GenerationTask):
         return self.llm
 
     def _extract_cpp(self, text: str | None) -> str | None:
-        """Extract C++ code from content."""
+        """Extract C++ code from content, including from final output channel."""
         if not text:
             return None
 
@@ -150,82 +151,6 @@ class ReasoningAgentGenerationTask(GenerationTask):
             return m[-1].strip()
 
         return None
-
-    def _normalize_scores(self, test_case_results: dict) -> dict:
-        """Normalize evaluator outputs to a common shape."""
-        # ICPC-style: flat dict with outputs list
-        if (
-            isinstance(test_case_results, dict)
-            and "outputs" in test_case_results
-            and "score" in test_case_results
-            and isinstance(test_case_results.get("outputs"), list)
-        ):
-            return {"overall": {"score": float(test_case_results["score"]), "outputs": test_case_results["outputs"]}}
-        # IOI-style: dict of subtasks
-        return {
-            k: {"score": float(v.get("score", 0.0)), "outputs": list(v.get("outputs", []))}
-            for k, v in test_case_results.items()
-        }
-
-    def _calculate_avg_score(self, normalized_results: dict) -> float:
-        """Calculate average score across all test outputs."""
-        all_outputs = []
-        for subtask_data in normalized_results.values():
-            all_outputs.extend(subtask_data.get("outputs", []))
-
-        if not all_outputs:
-            return 0.0
-
-        try:
-            total = len(all_outputs)
-            passed = sum(1.0 if float(o.get("score", 0.0)) == 1.0 else 0.0 for o in all_outputs)
-            return float(passed / total)
-        except Exception:
-            return 0.0
-
-    def _filter_test_outputs(self, test_case_results: dict) -> dict:
-        """Remove passed tests and truncate stdout/stderr in outputs."""
-        max_len = self.cfg.max_limit_in_test_output
-
-        def truncate(val):
-            if isinstance(val, str) and len(val) > max_len:
-                return val[:max_len] + "...<truncated>"
-            return val
-
-        def filter_outputs(outputs):
-            return [
-                {
-                    k: truncate(v) if k in ("run_stdout", "run_stderr", "compile_stdout", "compile_stderr") else v
-                    for k, v in o.items()
-                }
-                for o in outputs
-                if float(o.get("score", 0.0)) != 1.0
-            ]
-
-        # ICPC-style: flat dict with outputs list
-        if (
-            isinstance(test_case_results, dict)
-            and "outputs" in test_case_results
-            and "score" in test_case_results
-            and isinstance(test_case_results.get("outputs"), list)
-        ):
-            return {**test_case_results, "outputs": filter_outputs(test_case_results["outputs"])}
-
-        # IOI-style: dict of subtasks
-        return {k: {**v, "outputs": filter_outputs(v.get("outputs", []))} for k, v in test_case_results.items()}
-
-    def _parse_max_time(self, max_time_str: str | None) -> float | None:
-        """Parse max_time string (hh:mm:ss) into seconds."""
-        if not max_time_str:
-            return None
-        try:
-            parts = max_time_str.split(":")
-            if len(parts) != 3:
-                raise ValueError(f"Invalid max_time format: {max_time_str}. Expected hh:mm:ss")
-            hours, minutes, seconds = map(int, parts)
-            return hours * 3600 + minutes * 60 + seconds
-        except Exception as e:
-            raise ValueError(f"Invalid max_time format: {max_time_str}. Expected hh:mm:ss. Error: {e}")
 
     def _build_tools(self):
         """Build tools available to the orchestrator agent."""
@@ -395,6 +320,7 @@ class ReasoningAgentGenerationTask(GenerationTask):
                 "tool_out": tool_out,
                 "trace_entries": [],
                 "final_code": None,
+                "target_score": 0.0,
             }
 
         self.dp_print(data_point, f"tool: submit_solution(sample={sample}, code_len={len(code)})")
@@ -405,43 +331,23 @@ class ReasoningAgentGenerationTask(GenerationTask):
             "only_sample_tests": sample,
         }
         eval_result = await self.evaluator.eval_single(eval_payload)
-        test_case_results = eval_result.get("test_case_results", {})
 
-        is_ioi = "ioi_id" in data_point
-        if is_ioi and "subtask" in data_point:
-            subtask_name = data_point["subtask"]
-            if subtask_name in test_case_results:
-                test_case_results = {subtask_name: test_case_results[subtask_name]}
+        result = process_submission_result(
+            eval_result,
+            data_point,
+            explicit_feedback=self.cfg.explicit_feedback,
+            avg_score=self.cfg.avg_score,
+            max_limit_in_test_output=self.cfg.max_limit_in_test_output,
+        )
 
-        normalized = self._normalize_scores(test_case_results)
-
-        if self.cfg.explicit_feedback:
-            tool_out_dict = {**eval_result, "test_case_results": self._filter_test_outputs(test_case_results)}
-        else:
-            if is_ioi and "subtask_score" in data_point:
-                max_score = data_point["subtask_score"]
-                subtask_scores = {k: f"{v['score']}/{max_score}" for k, v in normalized.items()}
-            else:
-                subtask_scores = {k: v["score"] for k, v in normalized.items()}
-            tool_out_dict = {"subtask_scores": subtask_scores}
-
-        if self.cfg.avg_score:
-            tool_out_dict["avg_score"] = self._calculate_avg_score(normalized)
-
-        if is_ioi and "subtask_score" in data_point:
-            max_score = float(data_point["subtask_score"])
-            success = bool(normalized) and all(float(v["score"]) == max_score for v in normalized.values())
-        else:
-            success = bool(normalized) and all(float(v["score"]) == 1.0 for v in normalized.values())
-        tool_out_dict["success"] = success
-
-        tool_out = json.dumps(tool_out_dict)
+        success = result["success"]
+        tool_out = result["tool_output"]
         self.dp_print(data_point, f"result: success={success}")
 
         final_code = None
         if success and not sample:
             final_code = code
-            self.dp_print(data_point, "✓ solution accepted")
+            self.dp_print(data_point, "solution accepted")
 
         return {
             "name": "submit_solution",
@@ -449,6 +355,7 @@ class ReasoningAgentGenerationTask(GenerationTask):
             "tool_out": tool_out,
             "trace_entries": [{"source": "evaluator", "eval_result": eval_result, "code": code, "sample": sample}],
             "final_code": final_code,
+            "target_score": result["target_score"] if not sample else 0.0,
         }
 
     async def _summarize_progress(self, agent_messages: list[dict]) -> str:
@@ -489,7 +396,7 @@ class ReasoningAgentGenerationTask(GenerationTask):
         problem = data_point["question"]
 
         # Parse max_time and track start time
-        max_time_seconds = self._parse_max_time(self.cfg.max_time)
+        max_time_seconds = parse_max_time(self.cfg.max_time)
         start_time = time.time()
 
         # Load intermediate state if available
@@ -505,6 +412,8 @@ class ReasoningAgentGenerationTask(GenerationTask):
             num_reasoner_tokens = saved_state["num_reasoner_tokens"]
             previous_solution = saved_state["previous_solution"]
             final_code = saved_state["final_code"]
+            best_code = saved_state.get("best_code")
+            best_score = saved_state.get("best_score", 0.0)
             out_of_context = saved_state["out_of_context"]
             start_iteration = saved_state["iteration"]
         else:
@@ -519,6 +428,8 @@ class ReasoningAgentGenerationTask(GenerationTask):
             final_code = ""
             out_of_context = False
             previous_solution = None
+            best_code = None
+            best_score = 0.0
             start_iteration = 0
 
         tools = self._build_tools()
@@ -538,6 +449,8 @@ class ReasoningAgentGenerationTask(GenerationTask):
                             "num_reasoner_tokens": num_reasoner_tokens,
                             "previous_solution": previous_solution,
                             "final_code": final_code,
+                            "best_code": best_code,
+                            "best_score": best_score,
                             "out_of_context": out_of_context,
                             "iteration": iteration,
                         }
@@ -611,7 +524,13 @@ class ReasoningAgentGenerationTask(GenerationTask):
 
                     async def _unknown_tool(n=name, tid=tool_call_id):
                         tool_out = json.dumps({"error": f"Unknown tool: {n}"})
-                        return {"name": n, "tool_call_id": tid, "tool_out": tool_out, "trace_entries": []}
+                        return {
+                            "name": n,
+                            "tool_call_id": tid,
+                            "tool_out": tool_out,
+                            "trace_entries": [],
+                            "target_score": 0.0,
+                        }
 
                     coros.append(_unknown_tool())
 
@@ -635,8 +554,15 @@ class ReasoningAgentGenerationTask(GenerationTask):
                         previous_solution = result["first_valid_code"]
 
                 # Apply state from submit_solution
-                elif result["name"] == "submit_solution" and result.get("final_code"):
-                    final_code = result["final_code"]
+                elif result["name"] == "submit_solution":
+                    target_score = result.get("target_score", 0.0)
+                    if target_score > best_score:
+                        best_score = target_score
+                        best_code = (
+                            result.get("trace_entries", [{}])[0].get("code") if result.get("trace_entries") else None
+                        )
+                    if result.get("final_code"):
+                        final_code = result["final_code"]
 
             # Save intermediate state after each iteration
             if async_position is not None:
@@ -647,6 +573,8 @@ class ReasoningAgentGenerationTask(GenerationTask):
                     "num_reasoner_tokens": num_reasoner_tokens,
                     "previous_solution": previous_solution,
                     "final_code": final_code,
+                    "best_code": best_code,
+                    "best_score": best_score,
                     "out_of_context": out_of_context,
                     "iteration": iteration + 1,  # Save next iteration to start from
                 }
@@ -656,10 +584,14 @@ class ReasoningAgentGenerationTask(GenerationTask):
             if final_code:
                 break
 
-        # Use last generated solution if available
-        if not final_code and previous_solution:
-            final_code = previous_solution
-            self.dp_print(data_point, "using last generated solution")
+        # Use best or last generated solution if available
+        if not final_code:
+            if best_code:
+                final_code = best_code
+                self.dp_print(data_point, "using best scoring solution")
+            elif previous_solution:
+                final_code = previous_solution
+                self.dp_print(data_point, "using last generated solution")
 
         out = {
             "id": data_point["id"],

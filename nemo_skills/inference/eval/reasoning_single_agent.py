@@ -1,13 +1,18 @@
 import asyncio
 import json
 import logging
-import re
 import sys
 import time
 from dataclasses import asdict, field
 
 import hydra
 
+from nemo_skills.inference.eval.agent_utils import (
+    extract_cpp,
+    parse_max_time,
+    process_submission_result,
+    sanitize_message,
+)
 from nemo_skills.inference.generate import GenerationTask, GenerationTaskConfig, InferenceConfig
 from nemo_skills.inference.model import server_params
 from nemo_skills.inference.model.utils import is_context_window_exceeded_error
@@ -54,106 +59,6 @@ class ReasoningSingleAgentTask(GenerationTask):
     def dp_print(self, data_point, *args):
         dp_id = data_point.get("id", "?") if isinstance(data_point, dict) else "?"
         print(f"[{dp_id}]", *args)
-
-    @staticmethod
-    def _sanitize_message(msg: dict) -> dict:
-        """Ensure tool_call arguments in assistant messages are valid JSON.
-
-        Models sometimes generate invalid JSON escape sequences in tool call
-        arguments (e.g. \\q, \\0 from C++ code). When these messages are sent
-        back to the API, the server fails to parse the nested JSON.
-        """
-        tool_calls = msg.get("tool_calls")
-        if msg.get("role") != "assistant" or not tool_calls:
-            return msg
-        for tc in tool_calls:
-            func = tc.get("function") or {}
-            args_str = func.get("arguments")
-            if not isinstance(args_str, str) or not args_str:
-                continue
-            try:
-                json.loads(args_str)
-            except json.JSONDecodeError:
-                # Fix invalid escape sequences: replace \X (where X is not a
-                # valid JSON escape char) with \\X so the backslash is literal.
-                fixed = re.sub(r'\\(?!["\\/bfnrtu])', r"\\\\", args_str)
-                try:
-                    parsed = json.loads(fixed)
-                    func["arguments"] = json.dumps(parsed)
-                except json.JSONDecodeError:
-                    # Cannot recover — replace with empty args so the turn
-                    # is still representable as valid JSON.
-                    func["arguments"] = "{}"
-        return msg
-
-    def _extract_cpp(self, text: str | None) -> str | None:
-        if not text:
-            return None
-        matches = re.findall(r"```(?:cpp|c\+\+)\s*(.*?)```", text, re.DOTALL | re.IGNORECASE)
-        return matches[-1].strip() if matches else None
-
-    def _normalize_scores(self, test_case_results: dict) -> dict:
-        # ICPC-style: flat dict with outputs list
-        if (
-            isinstance(test_case_results, dict)
-            and "outputs" in test_case_results
-            and "score" in test_case_results
-            and isinstance(test_case_results.get("outputs"), list)
-        ):
-            return {"overall": {"score": float(test_case_results["score"]), "outputs": test_case_results["outputs"]}}
-        # IOI-style: dict of subtasks
-        return {
-            k: {"score": float(v.get("score", 0.0)), "outputs": list(v.get("outputs", []))}
-            for k, v in test_case_results.items()
-        }
-
-    def _calculate_avg_score(self, normalized_results: dict) -> float:
-        all_outputs = []
-        for subtask_data in normalized_results.values():
-            all_outputs.extend(subtask_data.get("outputs", []))
-        if not all_outputs:
-            return 0.0
-        total = len(all_outputs)
-        passed = sum(1.0 if float(o.get("score", 0.0)) == 1.0 else 0.0 for o in all_outputs)
-        return float(passed / total)
-
-    def _filter_test_outputs(self, test_case_results: dict) -> dict:
-        max_len = self.cfg.max_limit_in_test_output
-
-        def truncate(val):
-            if isinstance(val, str) and len(val) > max_len:
-                return val[:max_len] + "...<truncated>"
-            return val
-
-        def filter_outputs(outputs):
-            return [
-                {
-                    k: truncate(v) if k in ("run_stdout", "run_stderr", "compile_stdout", "compile_stderr") else v
-                    for k, v in o.items()
-                }
-                for o in outputs
-                if float(o.get("score", 0.0)) != 1.0
-            ]
-
-        # ICPC-style
-        if (
-            isinstance(test_case_results, dict)
-            and "outputs" in test_case_results
-            and "score" in test_case_results
-            and isinstance(test_case_results.get("outputs"), list)
-        ):
-            return {**test_case_results, "outputs": filter_outputs(test_case_results["outputs"])}
-        # IOI-style
-        return {k: {**v, "outputs": filter_outputs(v.get("outputs", []))} for k, v in test_case_results.items()}
-
-    def _parse_max_time(self, max_time_str: str | None) -> float | None:
-        if not max_time_str:
-            return None
-        parts = max_time_str.split(":")
-        if len(parts) != 3:
-            raise ValueError(f"Invalid max_time format: {max_time_str}. Expected hh:mm:ss")
-        hours, minutes, seconds = map(int, parts)
-        return hours * 3600 + minutes * 60 + seconds
 
     def _build_tools(self):
         return [
@@ -301,7 +206,7 @@ class ReasoningSingleAgentTask(GenerationTask):
 
         result = await self._call_reasoner(problem, previous_solution, feedback, instructions, data_point)
 
-        code = self._extract_cpp(result.get("generation", ""))
+        code = extract_cpp(result.get("generation", ""))
         trace_entries = [
             {
                 "source": "reasoner",
@@ -343,6 +248,7 @@ class ReasoningSingleAgentTask(GenerationTask):
                 "tool_out": tool_out,
                 "trace_entries": [],
                 "final_code": None,
+                "target_score": 0.0,
             }
 
         self.dp_print(data_point, f"tool: submit_solution(sample={sample}, code_len={len(code)})")
@@ -353,37 +259,17 @@ class ReasoningSingleAgentTask(GenerationTask):
             "only_sample_tests": sample,
         }
         eval_result = await self.evaluator.eval_single(eval_payload)
-        test_case_results = eval_result.get("test_case_results", {})
 
-        is_ioi = "ioi_id" in data_point
-        if is_ioi and "subtask" in data_point:
-            subtask_name = data_point["subtask"]
-            if subtask_name in test_case_results:
-                test_case_results = {subtask_name: test_case_results[subtask_name]}
+        result = process_submission_result(
+            eval_result,
+            data_point,
+            explicit_feedback=self.cfg.explicit_feedback,
+            avg_score=self.cfg.avg_score,
+            max_limit_in_test_output=self.cfg.max_limit_in_test_output,
+        )
 
-        normalized = self._normalize_scores(test_case_results)
-
-        if self.cfg.explicit_feedback:
-            tool_out_dict = {**eval_result, "test_case_results": self._filter_test_outputs(test_case_results)}
-        else:
-            if is_ioi and "subtask_score" in data_point:
-                max_score = data_point["subtask_score"]
-                subtask_scores = {k: f"{v['score']}/{max_score}" for k, v in normalized.items()}
-            else:
-                subtask_scores = {k: v["score"] for k, v in normalized.items()}
-            tool_out_dict = {"subtask_scores": subtask_scores}
-
-        if self.cfg.avg_score:
-            tool_out_dict["avg_score"] = self._calculate_avg_score(normalized)
-
-        if is_ioi and "subtask_score" in data_point:
-            max_score = float(data_point["subtask_score"])
-            success = bool(normalized) and all(float(v["score"]) == max_score for v in normalized.values())
-        else:
-            success = bool(normalized) and all(float(v["score"]) == 1.0 for v in normalized.values())
-        tool_out_dict["success"] = success
-
-        tool_out = json.dumps(tool_out_dict)
+        success = result["success"]
+        tool_out = result["tool_output"]
         self.dp_print(data_point, f"result: success={success}")
 
         final_code = None
@@ -397,6 +283,7 @@ class ReasoningSingleAgentTask(GenerationTask):
             "tool_out": tool_out,
             "trace_entries": [{"source": "evaluator", "eval_result": eval_result, "code": code, "sample": sample}],
             "final_code": final_code,
+            "target_score": result["target_score"] if not sample else 0.0,
         }
 
     async def _summarize_progress(self, agent_messages: list[dict]) -> str:
@@ -424,6 +311,8 @@ class ReasoningSingleAgentTask(GenerationTask):
             "num_reasoner_tokens": [],
             "final_code": "",
             "previous_solution": None,
+            "best_code": None,
+            "best_score": 0.0,
             "step": 0,
         }
 
@@ -438,7 +327,7 @@ class ReasoningSingleAgentTask(GenerationTask):
             data_point["subtask_score"] = "1"
 
         problem = data_point["question"]
-        max_time_seconds = self._parse_max_time(self.cfg.max_time)
+        max_time_seconds = parse_max_time(self.cfg.max_time)
         start_time = time.time()
 
         # Load intermediate state if available
@@ -458,6 +347,8 @@ class ReasoningSingleAgentTask(GenerationTask):
         num_reasoner_tokens = s["num_reasoner_tokens"]
         final_code = s["final_code"]
         previous_solution = s["previous_solution"]
+        best_code = s.get("best_code")
+        best_score = s.get("best_score", 0.0)
 
         for step in range(s["step"], self.cfg.max_steps):
             if max_time_seconds is not None and (time.time() - start_time) >= max_time_seconds:
@@ -497,7 +388,7 @@ class ReasoningSingleAgentTask(GenerationTask):
             msg = result["message"]
             if hasattr(msg, "model_dump"):
                 msg = msg.model_dump()
-            msg = self._sanitize_message(msg)
+            msg = sanitize_message(msg)
             agent_messages.append(msg)
             trace.append({"source": "agent", **msg})
 
@@ -536,7 +427,13 @@ class ReasoningSingleAgentTask(GenerationTask):
                     tool_out = json.dumps({"error": "Malformed tool call arguments"})
 
                     async def _bad_args(tout=tool_out, tid=tc_id):
-                        return {"name": "error", "tool_call_id": tid, "tool_out": tout, "trace_entries": []}
+                        return {
+                            "name": "error",
+                            "tool_call_id": tid,
+                            "tool_out": tout,
+                            "trace_entries": [],
+                            "target_score": 0.0,
+                        }
 
                     coros.append(_bad_args())
                     continue
@@ -549,7 +446,13 @@ class ReasoningSingleAgentTask(GenerationTask):
 
                     async def _unknown_tool(n=name, tid=tc_id):
                         tool_out = json.dumps({"error": f"Unknown tool: {n}"})
-                        return {"name": n, "tool_call_id": tid, "tool_out": tool_out, "trace_entries": []}
+                        return {
+                            "name": n,
+                            "tool_call_id": tid,
+                            "tool_out": tool_out,
+                            "trace_entries": [],
+                            "target_score": 0.0,
+                        }
 
                     coros.append(_unknown_tool())
 
@@ -567,8 +470,13 @@ class ReasoningSingleAgentTask(GenerationTask):
                     num_reasoner_tokens.extend(tr.get("reasoner_tokens", []))
                     if tr.get("first_valid_code"):
                         previous_solution = tr["first_valid_code"]
-                elif tr["name"] == "submit_solution" and tr.get("final_code"):
-                    final_code = tr["final_code"]
+                elif tr["name"] == "submit_solution":
+                    target_score = tr.get("target_score", 0.0)
+                    if target_score > best_score:
+                        best_score = target_score
+                        best_code = args.get("code", "")
+                    if tr.get("final_code"):
+                        final_code = tr["final_code"]
 
             # Save intermediate state after each step
             if async_position is not None:
@@ -577,9 +485,13 @@ class ReasoningSingleAgentTask(GenerationTask):
             if final_code:
                 break
 
-        if not final_code and previous_solution:
-            final_code = previous_solution
-            self.dp_print(data_point, "using last generated solution")
+        if not final_code:
+            if best_code:
+                final_code = best_code
+                self.dp_print(data_point, "using best scoring solution")
+            elif previous_solution:
+                final_code = previous_solution
+                self.dp_print(data_point, "using last generated solution")
 
         # Clear intermediate state when done
         if async_position is not None:
@@ -602,6 +514,8 @@ class ReasoningSingleAgentTask(GenerationTask):
             "num_reasoner_tokens": local_vars["num_reasoner_tokens"],
             "final_code": local_vars["final_code"],
             "previous_solution": local_vars["previous_solution"],
+            "best_code": local_vars["best_code"],
+            "best_score": local_vars["best_score"],
             "step": step,
         }
         self.save_intermediate_state(async_position, state)
