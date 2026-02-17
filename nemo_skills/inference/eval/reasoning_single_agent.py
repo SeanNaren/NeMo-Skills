@@ -66,7 +66,11 @@ class ReasoningSingleAgentTask(GenerationTask):
                 "type": "function",
                 "function": {
                     "name": "generate_solution",
-                    "description": "Ask the reasoner to generate or improve a C++17 solution. Use feedback to describe what went wrong. Use instructions to enforce a specific algorithm or approach.",
+                    "description": (
+                        "Ask the reasoner to generate or improve a C++17 solution. "
+                        "Returns a code preview. Use submit_solution to test and evaluate. "
+                        "Use feedback to describe what went wrong. Use instructions to enforce a specific algorithm."
+                    ),
                     "parameters": {
                         "type": "object",
                         "properties": {
@@ -86,14 +90,20 @@ class ReasoningSingleAgentTask(GenerationTask):
                 "type": "function",
                 "function": {
                     "name": "submit_solution",
-                    "description": "Submit a C++17 solution for evaluation. Set sample=true to run only sample tests first.",
+                    "description": (
+                        "Submit a solution for evaluation. Uses the most recently generated solution "
+                        "by default. Set sample=true to run only sample tests first. "
+                        "Only provide code if you want to submit a modified version."
+                    ),
                     "parameters": {
                         "type": "object",
                         "properties": {
-                            "code": {"type": "string", "description": "C++17 source code to submit"},
+                            "code": {
+                                "type": "string",
+                                "description": "Optional C++17 source code. If omitted, submits the last generated solution.",
+                            },
                             "sample": {"type": "boolean", "description": "Run only sample tests", "default": False},
                         },
-                        "required": ["code"],
                     },
                 },
             },
@@ -192,6 +202,14 @@ class ReasoningSingleAgentTask(GenerationTask):
             "num_generated_tokens": result.get("num_generated_tokens", 0),
         }
 
+    def _code_preview(self, code: str, max_lines: int = 15) -> str:
+        """Return the first and last few lines of code as a compact preview."""
+        lines = code.splitlines()
+        if len(lines) <= max_lines:
+            return code
+        half = max_lines // 2
+        return "\n".join(lines[:half] + [f"... ({len(lines) - max_lines} lines omitted) ..."] + lines[-half:])
+
     async def _execute_generate_solution(
         self, problem: str, previous_solution: str | None, args: dict, data_point: dict, tool_call_id
     ) -> dict:
@@ -219,12 +237,19 @@ class ReasoningSingleAgentTask(GenerationTask):
             }
         ]
 
-        if code:
-            tool_out = json.dumps({"solution": code, "status": "success"})
-            self.dp_print(data_point, f"reasoner: found valid solution ({len(code)} chars)")
-        else:
+        if not code:
             tool_out = json.dumps({"error": "No cpp code block found in generation", "status": "error"})
             self.dp_print(data_point, "reasoner: failed to generate code block")
+        else:
+            self.dp_print(data_point, f"reasoner: found valid solution ({len(code)} chars)")
+            # Return a compact code preview instead of the full source to save context
+            tool_out = json.dumps(
+                {
+                    "status": "success",
+                    "code_preview": self._code_preview(code),
+                    "code_length": len(code),
+                }
+            )
 
         return {
             "name": "generate_solution",
@@ -235,13 +260,14 @@ class ReasoningSingleAgentTask(GenerationTask):
             "first_valid_code": code,
         }
 
-    async def _execute_submit_solution(self, args: dict, data_point: dict, tool_call_id) -> dict:
-        code = args.get("code", "")
-        sample = bool(args.get("sample", False))
+    async def _execute_submit_solution(
+        self, args: dict, data_point: dict, tool_call_id, current_code: str | None = None
+    ) -> dict:
+        code = args.get("code", "") or current_code or ""
 
         if not code:
-            tool_out = json.dumps({"error": "No code provided"})
-            self.dp_print(data_point, "tool: submit_solution - no code provided")
+            tool_out = json.dumps({"error": "No code available. Call generate_solution first."})
+            self.dp_print(data_point, "tool: submit_solution - no code available")
             return {
                 "name": "submit_solution",
                 "tool_call_id": tool_call_id,
@@ -251,7 +277,13 @@ class ReasoningSingleAgentTask(GenerationTask):
                 "target_score": 0.0,
             }
 
-        self.dp_print(data_point, f"tool: submit_solution(sample={sample}, code_len={len(code)})")
+        sample = bool(args.get("sample", False))
+        using_tracked = not args.get("code") and current_code
+        self.dp_print(
+            data_point,
+            f"tool: submit_solution(sample={sample}, code_len={len(code)}"
+            f"{', using tracked code' if using_tracked else ''})",
+        )
 
         eval_payload = {
             **data_point,
@@ -286,17 +318,31 @@ class ReasoningSingleAgentTask(GenerationTask):
             "target_score": result["target_score"] if not sample else 0.0,
         }
 
-    async def _summarize_progress(self, agent_messages: list[dict]) -> str:
+    async def _summarize_progress(
+        self, agent_messages: list[dict], *, best_score: float = 0.0, num_submissions: int = 0
+    ) -> str:
         summary_messages_template = self.summary_prompt.fill({})
-        summary_messages = [summary_messages_template[0]] + agent_messages + [summary_messages_template[1]]
 
-        try:
-            result = await self.llm.generate_async(
-                prompt=summary_messages, include_response=False, **self._get_agent_inference_params()
-            )
-            return result.get("generation", "").strip()
-        except Exception:
-            return "Previous attempts exhausted context window."
+        # Try with full conversation first, then progressively truncate
+        for keep_last_n in (len(agent_messages), 20, 10, 5):
+            msgs_to_summarize = agent_messages[-keep_last_n:] if keep_last_n < len(agent_messages) else agent_messages
+            summary_messages = [summary_messages_template[0]] + msgs_to_summarize + [summary_messages_template[1]]
+            try:
+                result = await self.llm.generate_async(
+                    prompt=summary_messages, include_response=False, **self._get_agent_inference_params()
+                )
+                summary = result.get("generation", "").strip()
+                if summary:
+                    return summary
+            except Exception:
+                continue
+
+        # Fallback: construct a minimal but useful summary
+        parts = [f"Previous attempts did not find a fully passing solution after {num_submissions} submissions."]
+        if best_score > 0:
+            parts.append(f"Best score achieved so far: {best_score:.2f}.")
+        parts.append("Try a different algorithmic approach.")
+        return " ".join(parts)
 
     def _init_state(self, data_point):
         """Initialize fresh loop state for a data point."""
@@ -363,7 +409,10 @@ class ReasoningSingleAgentTask(GenerationTask):
             if result["message"] is None:
                 self.dp_print(data_point, "context window exceeded, generating summary and restarting")
 
-                summary = await self._summarize_progress(agent_messages)
+                num_submissions = sum(1 for t in trace if t.get("source") == "evaluator" and not t.get("sample"))
+                summary = await self._summarize_progress(
+                    agent_messages, best_score=best_score, num_submissions=num_submissions
+                )
                 self.dp_print(data_point, f"summary: {summary[:100]}...")
 
                 agent_messages = [
@@ -441,7 +490,9 @@ class ReasoningSingleAgentTask(GenerationTask):
                 if name == "generate_solution":
                     coros.append(self._execute_generate_solution(problem, previous_solution, args, data_point, tc_id))
                 elif name == "submit_solution":
-                    coros.append(self._execute_submit_solution(args, data_point, tc_id))
+                    coros.append(
+                        self._execute_submit_solution(args, data_point, tc_id, current_code=previous_solution)
+                    )
                 else:
 
                     async def _unknown_tool(n=name, tid=tc_id):
@@ -474,7 +525,10 @@ class ReasoningSingleAgentTask(GenerationTask):
                     target_score = tr.get("target_score", 0.0)
                     if target_score > best_score:
                         best_score = target_score
-                        best_code = args.get("code", "")
+                        # Get the code that was actually submitted from the trace
+                        submit_entries = [e for e in tr.get("trace_entries", []) if e.get("source") == "evaluator"]
+                        if submit_entries:
+                            best_code = submit_entries[-1].get("code", "")
                     if tr.get("final_code"):
                         final_code = tr["final_code"]
 
