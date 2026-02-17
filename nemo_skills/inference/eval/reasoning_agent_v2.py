@@ -325,9 +325,10 @@ class ReasoningAgentGenerationTask(GenerationTask):
                 )
                 self.dp_print(data_point, f"Injected instructions into reasoner prompt: {instructions}")
 
-            result = await self.reasoner_llm.generate_async(
-                prompt=messages, include_response=False, **asdict(self.cfg.inference_reasoner)
-            )
+            reasoner_params = asdict(self.cfg.inference_reasoner)
+            if reasoner_params.get("tokens_to_generate") is None:
+                reasoner_params["tokens_to_generate"] = self.cfg.inference.tokens_to_generate
+            result = await self.reasoner_llm.generate_async(prompt=messages, include_response=False, **reasoner_params)
 
             return {
                 "generation": result.get("generation", ""),
