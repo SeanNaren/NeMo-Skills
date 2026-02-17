@@ -110,6 +110,33 @@ class SwarmAgentTask(GenerationTask):
         dp_id = data_point.get("id", "?") if isinstance(data_point, dict) else "?"
         print(f"[{dp_id}]", *args)
 
+    @staticmethod
+    def _sanitize_message(msg: dict) -> dict:
+        """Ensure tool_call arguments in assistant messages are valid JSON.
+
+        Models sometimes generate invalid JSON escape sequences in tool call
+        arguments (e.g. \\q, \\0 from C++ code). When these messages are sent
+        back to the API, the server fails to parse the nested JSON.
+        """
+        tool_calls = msg.get("tool_calls")
+        if msg.get("role") != "assistant" or not tool_calls:
+            return msg
+        for tc in tool_calls:
+            func = tc.get("function") or {}
+            args_str = func.get("arguments")
+            if not isinstance(args_str, str) or not args_str:
+                continue
+            try:
+                json.loads(args_str)
+            except json.JSONDecodeError:
+                fixed = re.sub(r'\\(?!["\\/bfnrtu])', r"\\\\", args_str)
+                try:
+                    parsed = json.loads(fixed)
+                    func["arguments"] = json.dumps(parsed)
+                except json.JSONDecodeError:
+                    func["arguments"] = "{}"
+        return msg
+
     def _extract_cpp(self, text: str | None) -> str | None:
         if not text:
             return None
@@ -361,6 +388,7 @@ class SwarmAgentTask(GenerationTask):
             msg = result["message"]
             if hasattr(msg, "model_dump"):
                 msg = msg.model_dump()
+            msg = self._sanitize_message(msg)
             messages.append(msg)
             trace.append({"source": "subagent", **msg})
 
@@ -531,6 +559,7 @@ class SwarmAgentTask(GenerationTask):
             msg = result["message"]
             if hasattr(msg, "model_dump"):
                 msg = msg.model_dump()
+            msg = self._sanitize_message(msg)
             agent_messages.append(msg)
             trace.append({"source": "orchestrator", **msg})
 
