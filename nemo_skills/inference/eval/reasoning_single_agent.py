@@ -505,7 +505,16 @@ class ReasoningSingleAgentTask(GenerationTask):
             tool_call_ids = result.get("tool_call_ids", [])
 
             if not tool_calls:
-                self.dp_print(data_point, "no tool calls, ending")
+                if not final_code:
+                    nudge = (
+                        "We still do not have a successful submitted solution. "
+                        "Please continue till we reach a successfully submitted solution that passes all tests."
+                    )
+                    self.dp_print(data_point, f"no tool calls, nudging agent (step {step + 1})")
+                    nudge_msg = {"role": "user", "content": nudge}
+                    agent_messages.append(nudge_msg)
+                    trace.append({"source": "system", **nudge_msg})
+                    continue
                 break
 
             # Build coroutines for parallel execution
