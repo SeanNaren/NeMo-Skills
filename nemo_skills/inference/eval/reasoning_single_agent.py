@@ -120,12 +120,7 @@ class ReasoningSingleAgentTask(GenerationTask):
         Sets tokens_to_generate=None so the server auto-caps to the remaining
         context window instead of requesting a fixed budget that may overflow.
         """
-        params = asdict(self.cfg.inference_reasoner)
-        extra_body = dict(params.get("extra_body", {}) or {})
-        extra_body["chat_template_kwargs"] = {"thinking": True}
-        params["extra_body"] = extra_body
-        params["tokens_to_generate"] = None
-        return params
+        return asdict(self.cfg.inference_reasoner)
 
     async def _agent_turn(self, messages: list[dict]) -> dict:
         tools = self._build_tools()
