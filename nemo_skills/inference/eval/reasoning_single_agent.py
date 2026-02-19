@@ -110,11 +110,8 @@ class ReasoningSingleAgentTask(GenerationTask):
         ]
 
     def _get_agent_inference_params(self):
-        """Get inference params for the orchestrator (thinking disabled)."""
+        """Get inference params for the orchestrator."""
         params = asdict(self.cfg.inference)
-        extra_body = dict(params.get("extra_body", {}) or {})
-        extra_body["chat_template_kwargs"] = {"thinking": False}
-        params["extra_body"] = extra_body
         return params
 
     def _get_reasoner_inference_params(self):
@@ -189,7 +186,6 @@ class ReasoningSingleAgentTask(GenerationTask):
                 "They take priority over your default approach.\n\n"
                 f"{instructions}"
             )
-            self.dp_print(data_point, f"Injected instructions into reasoner prompt: {instructions}")
 
         async with self.semaphore:
             result = await self.llm.generate_async(
