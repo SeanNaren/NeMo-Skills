@@ -1,0 +1,19 @@
+user: |-
+  # Progress Review
+
+  You have made {total_submissions} full submissions. Your best score so far is {best_score}.
+  Recent submission scores: {recent_scores}
+
+  ## Failure Analysis
+  {failure_summary}
+
+  ## Approaches Tried So Far
+  {approaches_tried}
+
+  ## Required Action
+  Your recent submissions show NO improvement — you are stuck in a plateau.
+  You MUST try a FUNDAMENTALLY DIFFERENT algorithmic paradigm.
+  Do NOT tweak or optimize the current approach. Instead:
+  1. Identify which broad algorithm families you have NOT yet explored.
+  2. Create new sub-agents using completely different paradigms (e.g., if you tried greedy and DP, try graph algorithms or divide-and-conquer).
+  3. Assign tasks to all new sub-agents in parallel immediately.
