@@ -37,4 +37,5 @@ eval(
     data_dir=data_dir,
     output_dir=f"{output_dir}/",
     server_args=f"--tp {gpus * server_nodes} --max-total-tokens 262144 --tool-call-parser kimi_k2 --reasoning-parser kimi_k2",
+    split="test",
 )
