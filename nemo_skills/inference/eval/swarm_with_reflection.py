@@ -106,6 +106,7 @@ class SwarmWithReflectionConfig(GenerationTaskConfig):
     explicit_feedback: bool = False
     max_limit_in_test_output: int = 1000
     avg_score: bool = True
+    sample_only: bool = False
     agent_prompt_config: str = "eval/ioi/agent/swarm_reflection_orchestrator"
     summary_prompt_config: str = "eval/ioi/agent/summary"
     reflection_interval: int = 5
@@ -159,12 +160,32 @@ class SwarmWithReflectionTask(GenerationTask):
         params["tokens_to_generate"] = None
         return params
 
+    def _get_orchestrator_tools(self):
+        """Return orchestrator tools, adapting submit_solution when sample_only."""
+        if self.cfg.sample_only:
+            sample_only_submit = {
+                "type": "function",
+                "function": {
+                    "name": "submit_solution",
+                    "description": "Compile and run C++17 code against sample test cases. If all sample tests pass, the solution is accepted.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "code": {"type": "string", "description": "C++17 source code"},
+                        },
+                        "required": ["code"],
+                    },
+                },
+            }
+            return [CREATE_SUBAGENT_TOOL, ASSIGN_TASK_TOOL, sample_only_submit]
+        return ORCHESTRATOR_TOOLS
+
     async def _orchestrator_turn(self, messages: list[dict]) -> dict:
         """Call the orchestrator model with all orchestrator tools."""
         try:
             out = await self.generate_with_semaphore(
                 prompt=messages,
-                tools=ORCHESTRATOR_TOOLS,
+                tools=self._get_orchestrator_tools(),
                 include_response=True,
                 **self._get_orchestrator_inference_params(),
             )
@@ -227,6 +248,8 @@ class SwarmWithReflectionTask(GenerationTask):
 
         Also increments submission_counts['sample'] or submission_counts['full'].
         """
+        if self.cfg.sample_only:
+            sample = True
         if sample:
             submission_counts["sample"] = submission_counts.get("sample", 0) + 1
         else:
@@ -245,7 +268,8 @@ class SwarmWithReflectionTask(GenerationTask):
             avg_score=self.cfg.avg_score,
             max_limit_in_test_output=self.cfg.max_limit_in_test_output,
         )
-        return result["tool_output"], result["success"] and not sample, result["target_score"]
+        accepted = result["success"] and (not sample or self.cfg.sample_only)
+        return result["tool_output"], accepted, result["target_score"]
 
     def _build_subagent_system_prompt(self, user_system_prompt: str) -> str:
         """Augment the user-provided sub-agent system prompt with tool instructions."""
@@ -691,6 +715,8 @@ class SwarmWithReflectionTask(GenerationTask):
                     elif name == "submit_solution":
                         code = args.get("code", "")
                         sample = bool(args.get("sample", False))
+                        if self.cfg.sample_only:
+                            sample = True
 
                         if not code:
                             tool_out = json.dumps({"error": "No code provided"})

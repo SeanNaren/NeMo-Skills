@@ -34,6 +34,7 @@ class ReasoningAgentConfig(GenerationTaskConfig):
     explicit_feedback: bool = False
     max_limit_in_test_output: int = 1000
     avg_score: bool = True
+    sample_only: bool = False
     agent_prompt_config: str = "eval/ioi/agent/orchestrator"
     summary_prompt_config: str = "eval/ioi/agent/summary"
     reasoner_prompt_config: str = "eval/ioi/agent/agent_tools_solver"
@@ -179,13 +180,21 @@ class ReasoningAgentGenerationTask(GenerationTask):
                 "type": "function",
                 "function": {
                     "name": "submit_solution",
-                    "description": "Submit a C++17 solution for evaluation. Set sample=true to run only sample tests first.",
+                    "description": (
+                        "Compile and run C++17 code against sample test cases. If all sample tests pass, the solution is accepted."
+                        if self.cfg.sample_only
+                        else "Submit a C++17 solution for evaluation. Set sample=true to run only sample tests first."
+                    ),
                     "parameters": {
                         "type": "object",
-                        "properties": {
-                            "code": {"type": "string", "description": "C++17 source code to submit"},
-                            "sample": {"type": "boolean", "description": "Run only sample tests", "default": False},
-                        },
+                        "properties": (
+                            {"code": {"type": "string", "description": "C++17 source code to submit"}}
+                            if self.cfg.sample_only
+                            else {
+                                "code": {"type": "string", "description": "C++17 source code to submit"},
+                                "sample": {"type": "boolean", "description": "Run only sample tests", "default": False},
+                            }
+                        ),
                         "required": ["code"],
                     },
                 },
@@ -310,6 +319,8 @@ class ReasoningAgentGenerationTask(GenerationTask):
         """Execute a submit_solution tool call. Returns results without mutating shared state."""
         code = args.get("code", "")
         sample = bool(args.get("sample", False))
+        if self.cfg.sample_only:
+            sample = True
 
         if not code:
             tool_out = json.dumps({"error": "No code provided"})
@@ -345,7 +356,7 @@ class ReasoningAgentGenerationTask(GenerationTask):
         self.dp_print(data_point, f"result: success={success}")
 
         final_code = None
-        if success and not sample:
+        if success and (not sample or self.cfg.sample_only):
             final_code = code
             self.dp_print(data_point, "solution accepted")
 
@@ -355,7 +366,7 @@ class ReasoningAgentGenerationTask(GenerationTask):
             "tool_out": tool_out,
             "trace_entries": [{"source": "evaluator", "eval_result": eval_result, "code": code, "sample": sample}],
             "final_code": final_code,
-            "target_score": result["target_score"] if not sample else 0.0,
+            "target_score": result["target_score"] if (not sample or self.cfg.sample_only) else 0.0,
         }
 
     async def _summarize_progress(self, agent_messages: list[dict]) -> str:
