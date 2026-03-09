@@ -17,6 +17,7 @@ import logging
 import os
 
 import anthropic
+import httpx
 
 from nemo_skills.utils import get_logger_name
 
@@ -24,6 +25,15 @@ from .base import BaseModel, EndpointType
 from .utils import trim_after_stop_phrases
 
 LOG = logging.getLogger(get_logger_name(__file__))
+
+# Transient errors that warrant a retry
+_RETRYABLE_EXCEPTIONS = (
+    anthropic.APIConnectionError,
+    anthropic.APITimeoutError,
+    anthropic.InternalServerError,
+    httpx.RemoteProtocolError,
+    httpx.ReadError,
+)
 
 
 def _openai_messages_to_anthropic(messages: list[dict]) -> tuple[str | None, list[dict]]:
@@ -179,9 +189,26 @@ class AnthropicModel(BaseModel):
         # Always stream to avoid 504 gateway timeouts on long-running
         # requests (especially with extended thinking).  The SDK helper
         # accumulates chunks and returns a complete Message object.
-        async with self.concurrent_semaphore:
-            async with self.anthropic_client.messages.stream(**create_kwargs) as stream:
-                response = await stream.get_final_message()
+        # Retry on transient connection errors (proxy drops, incomplete reads).
+        max_retries = 3
+        for attempt in range(max_retries + 1):
+            try:
+                async with self.concurrent_semaphore:
+                    async with self.anthropic_client.messages.stream(**create_kwargs) as stream:
+                        response = await stream.get_final_message()
+                break
+            except _RETRYABLE_EXCEPTIONS as exc:
+                if attempt == max_retries:
+                    raise
+                wait = 2 ** attempt
+                LOG.warning(
+                    "Anthropic request failed (attempt %d/%d): %s. Retrying in %ds...",
+                    attempt + 1,
+                    max_retries + 1,
+                    exc,
+                    wait,
+                )
+                await asyncio.sleep(wait)
 
         # Parse the response
         result = self._parse_anthropic_response(response)
