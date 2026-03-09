@@ -37,6 +37,7 @@ class SupportedServers(str, Enum):
     sglang = "sglang"
     megatron = "megatron"
     openai = "openai"
+    anthropic = "anthropic"
     azureopenai = "azureopenai"
     gemini = "gemini"
     generic = "generic"

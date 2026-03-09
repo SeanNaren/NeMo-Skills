@@ -28,6 +28,7 @@ from .audio_utils import (
     make_audio_content_block,
     save_audio_chunk_to_base64,
 )
+from .anthropic import AnthropicModel
 from .azure import AzureOpenAIModel
 
 # Base classes
@@ -58,6 +59,7 @@ models = {
     "trtllm": VLLMModel,
     "megatron": MegatronModel,
     "openai": OpenAIModel,
+    "anthropic": AnthropicModel,
     "azureopenai": AzureOpenAIModel,
     "gemini": GeminiModel,
     "vllm": VLLMModel,
