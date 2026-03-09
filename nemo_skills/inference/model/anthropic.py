@@ -176,9 +176,12 @@ class AnthropicModel(BaseModel):
         if timeout:
             create_kwargs["timeout"] = timeout
 
-        # Make the API call
+        # Always stream to avoid 504 gateway timeouts on long-running
+        # requests (especially with extended thinking).  The SDK helper
+        # accumulates chunks and returns a complete Message object.
         async with self.concurrent_semaphore:
-            response = await self.anthropic_client.messages.create(**create_kwargs)
+            async with self.anthropic_client.messages.stream(**create_kwargs) as stream:
+                response = await stream.get_final_message()
 
         # Parse the response
         result = self._parse_anthropic_response(response)
