@@ -59,7 +59,7 @@ class OpenAIModel(BaseModel):
         return api_key
 
     def _is_reasoning_model(self, model_name: str) -> bool:
-        if "gpt-5" in model_name:
+        if "gpt-5" in model_name or "anthropic" in model_name:
             return True
         return re.match(r"^o\d", model_name)
 
