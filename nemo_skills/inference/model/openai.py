@@ -63,6 +63,28 @@ class OpenAIModel(BaseModel):
             return True
         return re.match(r"^o\d", model_name)
 
+    def _model_requires_single_sampling_param(self) -> bool:
+        # Azure Anthropic models reject requests that include both parameters.
+        return self.model.startswith("azure/anthropic/")
+
+    def _build_sampling_params(self, temperature: float, top_p: float) -> dict[str, float]:
+        if not self._model_requires_single_sampling_param():
+            return {"temperature": temperature, "top_p": top_p}
+
+        temperature_is_default = temperature == 0.0
+        top_p_is_default = top_p == 0.95
+
+        if not temperature_is_default and not top_p_is_default:
+            raise ValueError(
+                f"`{self.model}` does not support sending both `temperature` and `top_p`. "
+                "Set one to the default value (`temperature=0.0` or `top_p=0.95`) so only the other is sent."
+            )
+
+        # Use temperature for the default greedy setup (temperature=0.0, top_p=0.95).
+        if top_p_is_default:
+            return {"temperature": temperature}
+        return {"top_p": top_p}
+
     def _build_completion_request_params(self, **kwargs) -> dict:
         kwargs = copy.deepcopy(kwargs)
         assert kwargs.pop("tools", None) is None, "tools are not supported by completion requests."
@@ -82,6 +104,9 @@ class OpenAIModel(BaseModel):
             kwargs["seed"] = kwargs.pop("random_seed")
         if "stop_phrases" in kwargs:
             kwargs["stop"] = kwargs.pop("stop_phrases")
+        temperature = kwargs.pop("temperature", 0.0)
+        top_p = kwargs.pop("top_p", 0.95)
+        kwargs.update(self._build_sampling_params(temperature=temperature, top_p=top_p))
         return dict(kwargs)
 
     def _build_chat_request_params(
@@ -154,8 +179,7 @@ class OpenAIModel(BaseModel):
             params["logprobs"] = top_logprobs is not None
             params["top_logprobs"] = top_logprobs
             params["max_completion_tokens"] = tokens_to_generate
-            params["temperature"] = temperature
-            params["top_p"] = top_p
+            params.update(self._build_sampling_params(temperature=temperature, top_p=top_p))
 
         return params
 
