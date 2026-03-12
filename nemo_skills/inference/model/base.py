@@ -300,12 +300,16 @@ class BaseModel:
                             )
                     elif endpoint_type == EndpointType.responses:
                         assert isinstance(prompt, list), "Responses completion requests must be a list."
-                        request_params = self._build_responses_request_params(input=prompt, stream=stream, **kwargs)
+                        # Always stream internally to receive keepalive events and
+                        # prevent timeouts on long-running requests (reasoning models).
+                        request_params = self._build_responses_request_params(
+                            input=prompt, stream=True, **kwargs
+                        )
                         response = await litellm.aresponses(**request_params, **self.litellm_kwargs)
                         if stream:
-                            raise NotImplementedError("Streaming responses is not supported yet.")
+                            result = self._stream_responses_chunks_async(response)
                         else:
-                            result = self._parse_responses_completion_response(
+                            result = await self._collect_responses_stream_async(
                                 response, include_response=include_response, **kwargs
                             )
                     else:
@@ -533,3 +537,42 @@ class BaseModel:
             results = self._process_chat_chunk(chunk)
             for result in results:
                 yield result
+
+    async def _collect_responses_stream_async(self, stream, include_response=False, **kwargs):
+        """Collect streaming responses events into a final result dict.
+
+        Iterates through all events (including keepalive) to maintain
+        the connection and returns the parsed result from the completed response.
+        """
+        completed_response = None
+        generation_text = ""
+
+        async for event in stream:
+            event_type = getattr(event, "type", None)
+            if event_type == "response.output_text.delta":
+                generation_text += getattr(event, "delta", "")
+            elif event_type == "response.completed":
+                completed_response = getattr(event, "response", None)
+
+        # Use the completed response if available (contains full output + usage)
+        if completed_response is not None:
+            return self._parse_responses_completion_response(
+                completed_response, include_response=include_response, **kwargs
+            )
+
+        # Fallback: construct result from accumulated text deltas
+        return {"generation": generation_text, "num_generated_tokens": 0}
+
+    async def _stream_responses_chunks_async(self, response):
+        """Yield generation chunks from streaming responses events."""
+        async for event in response:
+            event_type = getattr(event, "type", None)
+            if event_type == "response.output_text.delta":
+                yield {"generation": getattr(event, "delta", "")}
+            elif event_type == "response.completed":
+                completed = getattr(event, "response", None)
+                if completed:
+                    result = {"generation": "", "finish_reason": getattr(completed, "status", "stop")}
+                    if hasattr(completed, "usage") and completed.usage:
+                        result["num_generated_tokens"] = completed.usage.output_tokens
+                    yield result
