@@ -300,16 +300,14 @@ class BaseModel:
                             )
                     elif endpoint_type == EndpointType.responses:
                         assert isinstance(prompt, list), "Responses completion requests must be a list."
-                        # Always stream internally to receive keepalive events and
-                        # prevent timeouts on long-running requests (reasoning models).
                         request_params = self._build_responses_request_params(
-                            input=prompt, stream=True, **kwargs
+                            input=prompt, stream=stream, **kwargs
                         )
                         response = await litellm.aresponses(**request_params, **self.litellm_kwargs)
                         if stream:
                             result = self._stream_responses_chunks_async(response)
                         else:
-                            result = await self._collect_responses_stream_async(
+                            result = self._parse_responses_completion_response(
                                 response, include_response=include_response, **kwargs
                             )
                     else:

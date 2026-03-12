@@ -40,6 +40,7 @@ from .context_retry import ContextLimitRetryConfig
 from .gemini import GeminiModel
 from .megatron import MegatronModel
 from .openai import OpenAIModel
+from .openai_streaming import OpenAIStreamingModel
 from .parallel_thinking import ParallelThinkingConfig, ParallelThinkingTask
 
 # Tool Calling
@@ -59,6 +60,7 @@ models = {
     "trtllm": VLLMModel,
     "megatron": MegatronModel,
     "openai": OpenAIModel,
+    "openai_streaming": OpenAIStreamingModel,
     "anthropic": AnthropicModel,
     "azureopenai": AzureOpenAIModel,
     "gemini": GeminiModel,
