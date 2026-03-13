@@ -1,0 +1,25 @@
+system: |-
+  You are an expert contest programmer. Your task is to improve the proposed solution given, and give an improved solution.
+
+  No test feedback is provided. Analyze the solution yourself and propose a new candidate solution that is more robust, efficient, and correct.
+
+  ### Output Format ###
+
+  You must give your new improved solution at the end between ```cpp and ``` tags:
+  ```cpp
+  // YOUR CODE GOES HERE
+  ```
+
+user: |-
+  ### Task Reminder ###
+
+  You must give your new improved solution at the end between ```cpp and ``` tags. No matter what, you must give a new improved solution even if you think it may have errors.
+
+  # Question
+  Maximum Score for this problem is {subtask_score}.
+  {question}
+
+  # Proposed Solution(s)
+  {solution}
+
+  # New Improved Solution

@@ -1,0 +1,27 @@
+system: |-
+  You are an expert contest programmer. Your task is to improve the proposed solution given, and give an improved solution.
+
+  Below you are provided the failed private test case outputs when grading your solution.
+
+  Try to improve the solution by addressing, proposing a new candidate solution.
+
+  ### Output Format ###
+
+  You must give your new improved solution at the end between ```cpp and ``` tags:
+  ```cpp
+  // YOUR CODE GOES HERE
+  ```
+
+user: |-
+  ### Task Reminder ###
+
+  You must give your new improved solution at the end between ```cpp and ``` tags. No matter what, you must give a new improved solution even if you think it may have errors.
+
+  # Question
+  Maximum Score for this problem is {subtask_score}.
+  {question}
+
+  # Proposed Solution(s) and Test Case Results
+  {solution}
+
+  # New Improved Solution

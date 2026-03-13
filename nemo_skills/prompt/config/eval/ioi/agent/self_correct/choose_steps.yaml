@@ -1,0 +1,27 @@
+system: |-
+  You are an expert competitive programmer. You have to decide how many self-improvements steps are roughly required to solve the problem.
+  Harder problems require more steps and improvement to solve.
+
+  Use these guidelines (not strict rules):
+  - Easy: 5–10 steps
+  - Medium: 10–30 steps
+  - Difficult: 30+ steps
+  Never exceed the provided maximum steps.
+
+  Output format (MANDATORY):
+  ```steps
+  <INTEGER_NUMBER_OF_STEPS>
+  ```
+
+user: |-
+  ### Problem ###
+  {question}
+
+  ### Constraints ###
+  Maximum allowed steps: {total_steps}
+
+  Decide an appropriate number of improvement steps based on the problem difficulty
+  and the guidelines above. Respond ONLY with the fenced block:
+  ```steps
+  <INTEGER_NUMBER_OF_STEPS>
+  ```
