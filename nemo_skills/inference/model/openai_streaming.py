@@ -14,6 +14,7 @@
 
 import asyncio
 import logging
+import random
 
 from openai import AsyncOpenAI
 
@@ -107,8 +108,9 @@ class OpenAIStreamingModel(OpenAIModel):
         )
 
         # Always stream to receive keepalive events and prevent gateway timeouts.
-        # Retry on transient connection errors (proxy drops, incomplete reads).
-        max_retries = 3
+        # Retry on transient connection errors (proxy drops, incomplete reads)
+        # with exponential backoff + jitter to avoid thundering-herd effects.
+        max_retries = 7
         for attempt in range(max_retries + 1):
             try:
                 async with self.concurrent_semaphore:
@@ -122,9 +124,9 @@ class OpenAIStreamingModel(OpenAIModel):
             except _RETRYABLE_EXCEPTIONS as exc:
                 if attempt == max_retries:
                     raise
-                wait = 2**attempt
+                wait = min(2**attempt, 60) + random.uniform(0, 2)
                 LOG.warning(
-                    "OpenAI responses streaming failed (attempt %d/%d): %s. Retrying in %ds...",
+                    "OpenAI responses streaming failed (attempt %d/%d): %s. Retrying in %.1fs...",
                     attempt + 1,
                     max_retries + 1,
                     exc,

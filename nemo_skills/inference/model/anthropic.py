@@ -15,6 +15,7 @@
 import asyncio
 import logging
 import os
+import random
 
 import anthropic
 import httpx
@@ -31,8 +32,11 @@ _RETRYABLE_EXCEPTIONS = (
     anthropic.APIConnectionError,
     anthropic.APITimeoutError,
     anthropic.InternalServerError,
+    anthropic.RateLimitError,
     httpx.RemoteProtocolError,
     httpx.ReadError,
+    httpx.ReadTimeout,
+    httpx.ConnectTimeout,
 )
 
 
@@ -189,8 +193,9 @@ class AnthropicModel(BaseModel):
         # Always stream to avoid 504 gateway timeouts on long-running
         # requests (especially with extended thinking).  The SDK helper
         # accumulates chunks and returns a complete Message object.
-        # Retry on transient connection errors (proxy drops, incomplete reads).
-        max_retries = 3
+        # Retry on transient connection errors (proxy drops, incomplete reads)
+        # with exponential backoff + jitter to avoid thundering-herd effects.
+        max_retries = 7
         for attempt in range(max_retries + 1):
             try:
                 async with self.concurrent_semaphore:
@@ -200,9 +205,9 @@ class AnthropicModel(BaseModel):
             except _RETRYABLE_EXCEPTIONS as exc:
                 if attempt == max_retries:
                     raise
-                wait = 2 ** attempt
+                wait = min(2 ** attempt, 60) + random.uniform(0, 2)
                 LOG.warning(
-                    "Anthropic request failed (attempt %d/%d): %s. Retrying in %ds...",
+                    "Anthropic request failed (attempt %d/%d): %s. Retrying in %.1fs...",
                     attempt + 1,
                     max_retries + 1,
                     exc,
