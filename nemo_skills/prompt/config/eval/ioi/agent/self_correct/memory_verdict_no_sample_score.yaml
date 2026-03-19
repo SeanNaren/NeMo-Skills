@@ -1,0 +1,32 @@
+system: |-
+  You are a highly skilled competitive programmer curating a small memory of promising, diverse solutions.
+  Your goal is to maintain K solutions that are useful references for future improvements.
+  Prefer solutions that: (1) are diverse in approach,
+  and (2) are interesting or instructive to reference later.
+
+  Output exactly one boxed verdict indicating how to update the memory:
+  - "no": keep the current memory unchanged
+  - "<idx>": replace the memory entry at the given 1-based index with the current solution
+
+  Output format (MANDATORY):
+  ```verdict
+  <no|idx>
+  ```
+
+user: |-
+  ### Memory Capacity ###
+  K = {k}
+
+  ### Current Memory ###
+  {memory_list}
+
+  ### New Candidate ###
+  {current_solution}
+
+  Decide whether to insert the new candidate into memory. If you insert, choose exactly one
+  entry to replace to keep memory size at K. Consider both diversity and usefulness.
+
+  Respond with ONLY the boxed verdict in a fenced block:
+  ```verdict
+  <no|idx>
+  ```
