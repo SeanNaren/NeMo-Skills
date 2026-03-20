@@ -4,12 +4,13 @@ import random
 import re
 import sys
 import time
-from dataclasses import field
+from dataclasses import asdict, field, is_dataclass
 
 import hydra
 
 from nemo_skills.inference.generate import GenerationTask, GenerationTaskConfig, InferenceConfig
 from nemo_skills.inference.model import server_params
+from nemo_skills.inference.model.utils import is_context_window_exceeded_error
 from nemo_skills.prompt.utils import get_prompt
 from nemo_skills.utils import get_help_message, get_logger_name, nested_dataclass, setup_logging
 
@@ -87,6 +88,8 @@ class IOIExecutionConfig(GenerationTaskConfig):
     sample_tests_attempts: int = 0
     per_step_evaluate: bool = True
     only_sample_tests: bool = False
+    context_window_retry_token_reduction: int = 10000
+    save_intermediate_checkpoints: bool = True
 
 
 cs = hydra.core.config_store.ConfigStore.instance()
@@ -124,15 +127,69 @@ class IOIExecutionGenerationTask(GenerationTask):
         # Each entry: {"solution": str, "score": float, "feedback": str} (order denotes recency)
         self.saved_solutions: list[dict] = []
 
+    def _should_save_intermediate_checkpoints(self) -> bool:
+        return bool(getattr(self.cfg, "save_intermediate_checkpoints", True))
+
+    def _load_saved_state(self, async_pos: int):
+        if not self._should_save_intermediate_checkpoints():
+            return None
+        return self.load_intermediate_state(async_pos)
+
+    def _save_checkpoint_state(self, async_pos: int, step: int, state: dict) -> None:
+        if not self._should_save_intermediate_checkpoints():
+            return
+        print(f"[Checkpoint] Saving intermediate pos={async_pos}, step={step}")
+        self.save_intermediate_state(async_pos, state)
+
     def log_example_prompt(self, data):
         pass
+
+    def _build_generation_params(self, data_point, all_data, prompt):
+        if is_dataclass(self.cfg.inference):
+            inference_params = asdict(self.cfg.inference)
+        else:
+            inference_params = dict(self.cfg.inference)
+
+        return {
+            **inference_params,
+            **self.extra_generate_params,
+            "prompt": self.fill_prompt(data_point=data_point, data=all_data, prompt=prompt),
+            "stop_phrases": [self.cfg.stop_phrase] if self.cfg.stop_phrase else None,
+        }
+
+    async def _generate_with_context_retry(self, generation_params, async_pos=None):
+        reduction = max(1, int(self.cfg.context_window_retry_token_reduction))
+        while True:
+            try:
+                return await self.generate_with_semaphore(**generation_params)
+            except Exception as error:
+                if not is_context_window_exceeded_error(error):
+                    raise
+
+                current_budget = generation_params.get("tokens_to_generate")
+                if not isinstance(current_budget, int):
+                    raise
+
+                next_budget = max(1, current_budget - reduction)
+                if next_budget == current_budget:
+                    raise
+
+                prefix = f"Async Pos : {async_pos} " if async_pos is not None else ""
+                print(
+                    f"[ContextRetry] {prefix}Reducing tokens_to_generate from {current_budget} to {next_budget}"
+                )
+                generation_params = {**generation_params, "tokens_to_generate": next_budget}
 
     async def _call_llm(self, data_point, all_data, prompt_key, **extra_data):
         combined_dp = {**data_point, **extra_data}
         prompt = self.prompts[prompt_key]
-        filled_prompt = self.fill_prompt(combined_dp, all_data, prompt=prompt)
+        generation_params = self._build_generation_params(combined_dp, all_data, prompt)
+        filled_prompt = generation_params["prompt"]
         start_t = time.time()
-        llm_out = await super().process_single_datapoint(combined_dp, all_data, prompt=prompt)
+        llm_out = await self._generate_with_context_retry(
+            generation_params,
+            async_pos=combined_dp.get(self.cfg.async_position_key),
+        )
         gen_time = time.time() - start_t
         return filled_prompt, llm_out, gen_time
 
@@ -196,7 +253,7 @@ class IOIExecutionGenerationTask(GenerationTask):
 
         # Attempt to resume from latest intermediate state
         async_pos = data_point[self.cfg.async_position_key]
-        saved_state = self.load_intermediate_state(async_pos)
+        saved_state = self._load_saved_state(async_pos)
         if saved_state:
             chat_history = saved_state["steps"]
             cur_generation_response = saved_state["generation"]
@@ -245,9 +302,9 @@ class IOIExecutionGenerationTask(GenerationTask):
                 print(
                     f"Async Pos : {async_pos} Step : {num_steps_completed} Problem {data_point['id']}: Decided improvement steps = {decided_total_steps} (max {int(self.cfg.total_steps)})"
                 )
-            print(f"[Checkpoint] Saving intermediate pos={async_pos}, step={num_steps_completed}")
-            self.save_intermediate_state(
+            self._save_checkpoint_state(
                 async_pos,
+                num_steps_completed,
                 {
                     "id": data_point["id"],
                     "generation": cur_generation_response,
@@ -372,9 +429,9 @@ class IOIExecutionGenerationTask(GenerationTask):
             )
 
             # Save checkpoint after each improvement step
-            print(f"[Checkpoint] Saving intermediate pos={async_pos}, step={num_steps_completed}")
-            self.save_intermediate_state(
+            self._save_checkpoint_state(
                 async_pos,
+                num_steps_completed,
                 {
                     "id": data_point["id"],
                     "generation": cur_generation_response,
