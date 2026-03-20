@@ -128,7 +128,7 @@ class IOIExecutionGenerationTask(GenerationTask):
         self.saved_solutions: list[dict] = []
 
     def _should_save_intermediate_checkpoints(self) -> bool:
-        return bool(getattr(self.cfg, "save_intermediate_checkpoints", True))
+        return bool(getattr(self.cfg, "save_intermediate_checkpoints", True) or self._deadline_ts is not None)
 
     def _load_saved_state(self, async_pos: int):
         if not self._should_save_intermediate_checkpoints():
