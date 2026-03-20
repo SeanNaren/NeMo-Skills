@@ -89,7 +89,8 @@ class IOIExecutionConfig(GenerationTaskConfig):
     per_step_evaluate: bool = True
     only_sample_tests: bool = False
     context_window_retry_token_reduction: int = 10000
-    save_intermediate_checkpoints: bool = True
+    save_every_step: bool = True
+    save_intermediate_checkpoints: bool | None = None
 
 
 cs = hydra.core.config_store.ConfigStore.instance()
@@ -127,19 +128,36 @@ class IOIExecutionGenerationTask(GenerationTask):
         # Each entry: {"solution": str, "score": float, "feedback": str} (order denotes recency)
         self.saved_solutions: list[dict] = []
 
-    def _should_save_intermediate_checkpoints(self) -> bool:
-        return bool(getattr(self.cfg, "save_intermediate_checkpoints", True) or self._deadline_ts is not None)
+    def _save_every_step_enabled(self) -> bool:
+        legacy_value = getattr(self.cfg, "save_intermediate_checkpoints", None)
+        if legacy_value is not None:
+            return bool(legacy_value)
+        return bool(getattr(self.cfg, "save_every_step", True))
+
+    def _should_resume_from_checkpoint(self) -> bool:
+        return self._save_every_step_enabled() or self._deadline_ts is not None
 
     def _load_saved_state(self, async_pos: int):
-        if not self._should_save_intermediate_checkpoints():
+        if not self._should_resume_from_checkpoint():
             return None
         return self.load_intermediate_state(async_pos)
 
-    def _save_checkpoint_state(self, async_pos: int, step: int, state: dict) -> None:
-        if not self._should_save_intermediate_checkpoints():
+    def _save_checkpoint_state(self, async_pos: int, step: int, state: dict, force: bool = False) -> None:
+        if force:
+            if self._deadline_ts is None:
+                return
+        elif not self._save_every_step_enabled():
             return
         print(f"[Checkpoint] Saving intermediate pos={async_pos}, step={step}")
         self.save_intermediate_state(async_pos, state)
+
+    def _maybe_exit_on_time_limit(self, async_pos: int, step: int, state: dict) -> None:
+        if self._deadline_ts is None or time.time() < self._deadline_ts:
+            return
+        if not self._save_every_step_enabled():
+            self._save_checkpoint_state(async_pos, step, state, force=True)
+        print("[TimeLimit] Reached limit after checkpoint save; exiting cleanly.")
+        sys.exit(0)
 
     def log_example_prompt(self, data):
         pass
@@ -302,19 +320,17 @@ class IOIExecutionGenerationTask(GenerationTask):
                 print(
                     f"Async Pos : {async_pos} Step : {num_steps_completed} Problem {data_point['id']}: Decided improvement steps = {decided_total_steps} (max {int(self.cfg.total_steps)})"
                 )
-            self._save_checkpoint_state(
-                async_pos,
-                num_steps_completed,
-                {
-                    "id": data_point["id"],
-                    "generation": cur_generation_response,
-                    "steps": chat_history,
-                    "num_steps_completed": num_steps_completed,
-                    "saved_solutions": self.saved_solutions,
-                    "selected_k": selected_k,
-                    "decided_total_steps": decided_total_steps,
-                },
-            )
+            checkpoint_state = {
+                "id": data_point["id"],
+                "generation": cur_generation_response,
+                "steps": chat_history,
+                "num_steps_completed": num_steps_completed,
+                "saved_solutions": self.saved_solutions,
+                "selected_k": selected_k,
+                "decided_total_steps": decided_total_steps,
+            }
+            self._save_checkpoint_state(async_pos, num_steps_completed, checkpoint_state)
+            self._maybe_exit_on_time_limit(async_pos, num_steps_completed, checkpoint_state)
 
         for step_num in range(num_steps_completed, decided_total_steps):
             is_icpc = False
@@ -429,22 +445,16 @@ class IOIExecutionGenerationTask(GenerationTask):
             )
 
             # Save checkpoint after each improvement step
-            self._save_checkpoint_state(
-                async_pos,
-                num_steps_completed,
-                {
-                    "id": data_point["id"],
-                    "generation": cur_generation_response,
-                    "steps": chat_history,
-                    "num_steps_completed": num_steps_completed,
-                    "saved_solutions": self.saved_solutions,
-                    "selected_k": selected_k,
-                },
-            )
-            # Time limit check only inside the loop after checkpoint save
-            if self._deadline_ts is not None and time.time() >= self._deadline_ts:
-                print("[TimeLimit] Reached limit after step save; exiting cleanly.")
-                sys.exit(0)
+            checkpoint_state = {
+                "id": data_point["id"],
+                "generation": cur_generation_response,
+                "steps": chat_history,
+                "num_steps_completed": num_steps_completed,
+                "saved_solutions": self.saved_solutions,
+                "selected_k": selected_k,
+            }
+            self._save_checkpoint_state(async_pos, num_steps_completed, checkpoint_state)
+            self._maybe_exit_on_time_limit(async_pos, num_steps_completed, checkpoint_state)
 
         return {
             "id": data_point["id"],
