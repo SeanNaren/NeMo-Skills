@@ -193,9 +193,7 @@ class IOIExecutionGenerationTask(GenerationTask):
                     raise
 
                 prefix = f"Async Pos : {async_pos} " if async_pos is not None else ""
-                print(
-                    f"[ContextRetry] {prefix}Reducing tokens_to_generate from {current_budget} to {next_budget}"
-                )
+                print(f"[ContextRetry] {prefix}Reducing tokens_to_generate from {current_budget} to {next_budget}")
                 generation_params = {**generation_params, "tokens_to_generate": next_budget}
 
     async def _call_llm(self, data_point, all_data, prompt_key, **extra_data):
@@ -411,6 +409,7 @@ class IOIExecutionGenerationTask(GenerationTask):
                 and all(all(float(o["score"]) == 1.0 for o in v["outputs"]) for v in normalized_results.values())
             ):
                 print(f"[Success] Problem {data_point['id']}: All test cases passed at step {step_num}.")
+                break
 
             print(f"[Step {step_num + 1}/{self.cfg.total_steps}] Self-improving solution.")
 
