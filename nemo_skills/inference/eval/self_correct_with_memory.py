@@ -356,7 +356,12 @@ class IOIExecutionGenerationTask(GenerationTask):
             )
             cur_generation_response = solution_response["generation"]
             chat_history.append(
-                {"num_generated_tokens": solution_response["num_generated_tokens"], "generation_time": gen_time}
+                {
+                    "prompt": prompt_txt,
+                    "response": cur_generation_response,
+                    "num_generated_tokens": solution_response["num_generated_tokens"],
+                    "generation_time": gen_time,
+                }
             )
 
             print("[Initial] Generated initial solution.")
@@ -410,6 +415,7 @@ class IOIExecutionGenerationTask(GenerationTask):
                         **data_point,
                         "generation": cur_generation_response,
                         "only_sample_tests": self.cfg.only_sample_tests,
+                        "skip_input_case_evaluation": True,
                     }
                 )
                 eval_time = time.time() - eval_start_t

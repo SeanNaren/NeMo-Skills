@@ -441,7 +441,7 @@ class IOIEvaluator(BaseEvaluator):
 
         # Optionally run custom input cases
         input_outputs = []
-        if self.inputdata is not None:
+        if self.inputdata is not None and not entry.get("skip_input_case_evaluation", False):
             problem_inputs = self.inputdata[str(entry["id"])]
             for i in range(0, len(problem_inputs), batch_size):
                 batch = problem_inputs[i : i + batch_size]
