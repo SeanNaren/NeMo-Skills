@@ -6,7 +6,10 @@ import sys
 import time
 from dataclasses import asdict, field, is_dataclass
 
+import httpx
 import hydra
+import litellm
+import openai
 
 from nemo_skills.inference.generate import GenerationTask, GenerationTaskConfig, InferenceConfig
 from nemo_skills.inference.model import server_params
@@ -15,6 +18,51 @@ from nemo_skills.prompt.utils import get_prompt
 from nemo_skills.utils import get_help_message, get_logger_name, nested_dataclass, setup_logging
 
 LOG = logging.getLogger(get_logger_name(__file__))
+
+
+def _is_closed_client_error(error: Exception) -> bool:
+    return "client has been closed" in str(error).lower()
+
+
+def _is_retryable_generation_error(error: Exception) -> bool:
+    if isinstance(
+        error,
+        (
+            openai.APIConnectionError,
+            openai.APITimeoutError,
+            httpx.RemoteProtocolError,
+            httpx.ReadError,
+            httpx.ReadTimeout,
+            httpx.ConnectTimeout,
+            httpx.ConnectError,
+        ),
+    ):
+        return True
+
+    error_str = str(error).lower()
+    retryable_markers = (
+        "connection error",
+        "client has been closed",
+        "server disconnected",
+        "connection reset",
+        "connection aborted",
+        "timed out",
+        "temporarily unavailable",
+    )
+    return any(marker in error_str for marker in retryable_markers)
+
+
+def _reset_litellm_sessions() -> None:
+    httpx_limits = httpx.Limits(max_keepalive_connections=None, max_connections=None)
+    old_client = getattr(litellm, "client_session", None)
+    if old_client is not None:
+        try:
+            old_client.close()
+        except Exception:
+            pass
+
+    litellm.client_session = httpx.Client(limits=httpx_limits)
+    litellm.aclient_session = httpx.AsyncClient(limits=httpx_limits)
 
 
 def extract_code_block(text: str):
@@ -89,6 +137,8 @@ class IOIExecutionConfig(GenerationTaskConfig):
     per_step_evaluate: bool = True
     only_sample_tests: bool = False
     context_window_retry_token_reduction: int = 10000
+    transient_error_retry_attempts: int = 7
+    transient_error_retry_max_delay_seconds: float = 60.0
     save_every_step: bool = True
     save_intermediate_checkpoints: bool | None = None
 
@@ -177,11 +227,31 @@ class IOIExecutionGenerationTask(GenerationTask):
 
     async def _generate_with_context_retry(self, generation_params, async_pos=None):
         reduction = max(1, int(self.cfg.context_window_retry_token_reduction))
+        transient_retry_attempts = max(0, int(getattr(self.cfg, "transient_error_retry_attempts", 7) or 0))
+        transient_retry_max_delay = max(
+            0.0, float(getattr(self.cfg, "transient_error_retry_max_delay_seconds", 60.0) or 0.0)
+        )
+        transient_retry_count = 0
         while True:
             try:
                 return await self.generate_with_semaphore(**generation_params)
             except Exception as error:
                 if not is_context_window_exceeded_error(error):
+                    if _is_retryable_generation_error(error) and transient_retry_count < transient_retry_attempts:
+                        transient_retry_count += 1
+                        if _is_closed_client_error(error):
+                            _reset_litellm_sessions()
+
+                        wait_seconds = min(
+                            2 ** (transient_retry_count - 1), transient_retry_max_delay
+                        ) + random.uniform(0, 2)
+                        prefix = f"Async Pos : {async_pos} " if async_pos is not None else ""
+                        print(
+                            f"[Retry] {prefix}Retrying after transient error "
+                            f"{transient_retry_count}/{transient_retry_attempts}: {error}"
+                        )
+                        await asyncio.sleep(wait_seconds)
+                        continue
                     raise
 
                 current_budget = generation_params.get("tokens_to_generate")
