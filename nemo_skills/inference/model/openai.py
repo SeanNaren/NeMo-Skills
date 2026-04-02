@@ -67,21 +67,25 @@ class OpenAIModel(BaseModel):
         # Azure Anthropic models reject requests that include both parameters.
         return self.model.startswith("azure/anthropic/")
 
-    def _build_sampling_params(self, temperature: float, top_p: float) -> dict[str, float]:
+    def _build_sampling_params(self, temperature: float, top_p: float | None) -> dict[str, float]:
         if not self._model_requires_single_sampling_param():
-            return {"temperature": temperature, "top_p": top_p}
+            sampling_params = {"temperature": temperature}
+            if top_p is not None:
+                sampling_params["top_p"] = top_p
+            return sampling_params
 
         temperature_is_default = temperature == 0.0
-        top_p_is_default = top_p == 0.95
+        top_p_is_default_or_unset = top_p in [0.95, None]
 
-        if not temperature_is_default and not top_p_is_default:
+        if not temperature_is_default and not top_p_is_default_or_unset:
             raise ValueError(
                 f"`{self.model}` does not support sending both `temperature` and `top_p`. "
-                "Set one to the default value (`temperature=0.0` or `top_p=0.95`) so only the other is sent."
+                "Set one to the default value (`temperature=0.0` or `top_p=0.95`), "
+                "or unset `top_p`, so only the other is sent."
             )
 
         # Use temperature for the default greedy setup (temperature=0.0, top_p=0.95).
-        if top_p_is_default:
+        if top_p in [None, 0.95]:
             return {"temperature": temperature}
         return {"top_p": top_p}
 
@@ -114,7 +118,7 @@ class OpenAIModel(BaseModel):
         messages: list[dict],
         tokens_to_generate: int,
         temperature: float,
-        top_p: float,
+        top_p: float | None,
         top_k: int,
         min_p: float,
         repetition_penalty: float,
@@ -158,9 +162,9 @@ class OpenAIModel(BaseModel):
                 raise ValueError(
                     "`temperature` is not supported by reasoning models, please set it to default value `0.0`."
                 )
-            if top_p != 0.95:
+            if top_p is not None and top_p != 0.95:
                 raise ValueError(
-                    "`top_p` is not supported by reasoning models, please set it to default value `0.95`."
+                    "`top_p` is not supported by reasoning models, please set it to default value `0.95` or `None`."
                 )
             if top_logprobs is not None:
                 raise ValueError("`top_logprobs` is not supported by reasoning models, please set it to `None`.")
